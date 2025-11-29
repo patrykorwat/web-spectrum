@@ -19,11 +19,30 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 export enum Protocol {
     ADSB = 'ADSB',
     GateTX24 = 'GATETX24',
+    GNSS_GPS_L1 = 'GNSS_GPS_L1',
+    GNSS_GALILEO_E1 = 'GNSS_GALILEO_E1',
+    GNSS_GLONASS_L1 = 'GNSS_GLONASS_L1',
+    GNSS_BEIDOU_B1I = 'GNSS_BEIDOU_B1I',
 }
 
-export const isIsm = (proto: Protocol) => proto !== Protocol.ADSB;
+export const isIsm = (proto: Protocol) =>
+    proto !== Protocol.ADSB &&
+    proto !== Protocol.GNSS_GPS_L1 &&
+    proto !== Protocol.GNSS_GALILEO_E1 &&
+    proto !== Protocol.GNSS_GLONASS_L1 &&
+    proto !== Protocol.GNSS_BEIDOU_B1I;
+
+export const isGNSS = (proto: Protocol) =>
+    proto === Protocol.GNSS_GPS_L1 ||
+    proto === Protocol.GNSS_GALILEO_E1 ||
+    proto === Protocol.GNSS_GLONASS_L1 ||
+    proto === Protocol.GNSS_BEIDOU_B1I;
 
 export const ProtocolToMsgLength: ReadonlyMap<Protocol, number> = new Map([
     [Protocol.ADSB, 120],
     [Protocol.GateTX24, 24],
+    [Protocol.GNSS_GPS_L1, 300],
+    [Protocol.GNSS_GALILEO_E1, 250],
+    [Protocol.GNSS_GLONASS_L1, 100],
+    [Protocol.GNSS_BEIDOU_B1I, 300],
 ])

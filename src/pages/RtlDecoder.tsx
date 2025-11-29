@@ -16,7 +16,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 
 import Container from '@mui/material/Container';
 import Box from '@mui/material/Box';
@@ -44,8 +44,10 @@ import Paper from '@mui/material/Paper';
 import { RTL2832U_Provider } from "../device/rtlsdr/rtl2832u.ts";
 import { Radio } from '../device/radio.ts';
 import { LoggingReceiver } from '../device/sample_receiver.ts';
+import { FilteringSampleReceiver, FilterConfig } from '../device/filter_receiver.ts';
 import { Demodulator as IsmDemodulator } from '../protocol/ism/demodulator.ts'
-import { Protocol, isIsm } from '../protocol/protocol.ts'
+import { GNSSDemodulator } from '../protocol/gnss/demodulator.ts'
+import { Protocol, isIsm, isGNSS } from '../protocol/protocol.ts'
 
 import { downloadFile } from '../utils/io.ts';
 
@@ -58,6 +60,12 @@ function RtlDecoder() {
   const [protocol, setProtocol] = useState<Protocol>(Protocol.ADSB);
   const [frequency, setFrequency] = useState<number>(1090);
   const [frequencyMag, setFrequencyMag] = useState<number>(1000000);
+  const [biasTEnabled, setBiasTEnabled] = useState<boolean>(false);
+
+  // Interference mitigation filter state
+  const [filterEnabled, setFilterEnabled] = useState<boolean>(false);
+  const [notchFrequency, setNotchFrequency] = useState<number>(0); // Auto-detect
+  const [filterReceiver, setFilterReceiver] = useState<FilteringSampleReceiver | null>(null);
 
   const [decodedItems, setDecodedItems] = useState<any>([]);
 
@@ -71,6 +79,7 @@ function RtlDecoder() {
   }
 
   const ismDemodulator = new IsmDemodulator();
+  const [gnssDemodulator] = useState(() => new GNSSDemodulator());
 
   const download = () => {
     let lines = 'decoded,time,msg'
@@ -96,11 +105,58 @@ return (
           console.log("frequency to be set", freqHz);
             if (radio === undefined) {
               const rtlProvider = new RTL2832U_Provider();
-              const rtlRadio = new Radio(rtlProvider, new LoggingReceiver(protocol, (msg) => {
+
+              // Store filter receiver ref for dynamic updates
+              let filterReceiverRef: FilteringSampleReceiver | null = null;
+
+              // Create the logging receiver
+              const loggingReceiver = new LoggingReceiver(protocol, (msg) => {
                 if (protocol === Protocol.ADSB) {
                   setDecodedItems(prevDecodedItems => {
                     return [msg, ...prevDecodedItems];
                   });
+                } else if (isGNSS(protocol)) {
+                  // GNSS processing
+                  console.log(`[RtlDecoder] GNSS callback received, msg.msg type: ${msg.msg?.constructor?.name}, length: ${msg.msg?.length}`);
+                  // Protocol is set once when radio starts, not on every sample batch
+                  const result = gnssDemodulator.processSamples(msg.msg.buffer);
+                  if (result) {
+                    // Auto-update notch filter frequency if CW jamming detected
+                    if (result.jamming.isJammed && result.jamming.jammingType === 'CW_TONE' && filterReceiverRef) {
+                      const detectedFreq = result.jamming.peakFrequencyHz;
+                      console.log(`[AUTO-FILTER] CW tone detected at ${detectedFreq.toFixed(0)} Hz, updating notch filter`);
+                      filterReceiverRef.updateConfig({
+                        notchFrequencyHz: detectedFreq
+                      });
+                      setNotchFrequency(Math.round(detectedFreq));
+                    }
+
+                    // Create a message object for display with jamming info
+                    let decoded = '';
+
+                    // Jamming status (if present)
+                    if (result.jamming.isJammed) {
+                      decoded += `⚠️ JAMMING: ${result.jamming.jammingType} (J/S: ${result.jamming.jammingToSignalRatio.toFixed(1)}dB, Freq: ${result.jamming.peakFrequencyHz.toFixed(0)}Hz) | `;
+                    }
+
+                    // Satellite info
+                    if (result.satellites.length > 0) {
+                      decoded += `${result.satellites.length} sat(s): ${result.satellites.map(s => `${s.prn}(${s.snr.toFixed(1)}dB)`).join(', ')}`;
+                    } else if (result.jamming.isJammed) {
+                      decoded += 'No satellites - jammed';
+                    } else {
+                      decoded += `No satellites | Noise: ${result.jamming.noisePowerDbm.toFixed(1)}dBm`;
+                    }
+
+                    const gnssMsg = {
+                      decoded,
+                      time: new Date(result.timestamp),
+                      msg: result
+                    };
+                    setDecodedItems(prevDecodedItems => {
+                      return [gnssMsg, ...prevDecodedItems];
+                    });
+                  }
                 } else {
                   setPowerLevels(prevMsg => {
                     if (prevMsg.length > pointsBatch-1000) {
@@ -114,9 +170,46 @@ return (
                     }
                   });
                 }
-              }));
+              });
+
+              // Wrap in filtering receiver if enabled
+              let sampleReceiver = loggingReceiver;
+              if (filterEnabled) {
+                const filterConfig: FilterConfig = {
+                  notchFilterEnabled: true,
+                  notchFrequencyHz: notchFrequency || 0, // Will auto-detect if 0
+                  notchBandwidthHz: 1000, // 1 kHz notch width
+                  agcLimitEnabled: true,
+                  agcTargetPower: 0.1, // -10dB target
+                  pulseBlankingEnabled: true,
+                  pulseThresholdMultiplier: 3.0
+                };
+
+                const filteringReceiver = new FilteringSampleReceiver(loggingReceiver, filterConfig);
+                filterReceiverRef = filteringReceiver; // Set local ref
+                setFilterReceiver(filteringReceiver); // Set state
+                sampleReceiver = filteringReceiver;
+                console.log('[RTL-SDR] Interference mitigation filters ENABLED');
+              } else {
+                console.log('[RTL-SDR] Interference mitigation filters DISABLED');
+              }
+
+              const rtlRadio = new Radio(rtlProvider, sampleReceiver);
               rtlRadio.setFrequency(freqHz);
               rtlRadio.setGain(40);
+
+              // Enable Bias-T if requested (for active GNSS antennas)
+              if (biasTEnabled) {
+                console.log("[RTL-SDR] Enabling Bias-T for active antenna power");
+                rtlRadio.enableBiasTee(true);
+              }
+
+              // Set GNSS protocol once (not on every sample batch!)
+              if (isGNSS(protocol)) {
+                console.log(`[RTL-SDR] Setting GNSS protocol: ${protocol}`);
+                gnssDemodulator.setProtocol(protocol);
+              }
+
               rtlRadio.start();
               setRadio(rtlRadio);
             } else {
@@ -143,6 +236,18 @@ return (
             if (event.target.value === Protocol.ADSB) {
               setFrequency(1090);
               setFrequencyMag(1000000);
+            } else if (event.target.value === Protocol.GNSS_GPS_L1) {
+              setFrequency(1575.42);
+              setFrequencyMag(1000000);
+            } else if (event.target.value === Protocol.GNSS_GALILEO_E1) {
+              setFrequency(1575.42);
+              setFrequencyMag(1000000);
+            } else if (event.target.value === Protocol.GNSS_GLONASS_L1) {
+              setFrequency(1602);
+              setFrequencyMag(1000000);
+            } else if (event.target.value === Protocol.GNSS_BEIDOU_B1I) {
+              setFrequency(1561.098);
+              setFrequencyMag(1000000);
             } else {
               setFrequency(433);
               setFrequencyMag(1000000);
@@ -151,6 +256,11 @@ return (
           sx={{ marginRight: '15px' }}
         >
           <MenuItem value={Protocol.ADSB}>ADS-B</MenuItem>
+          <MenuItem disabled value={""}>GNSS Constellations</MenuItem>
+          <MenuItem value={Protocol.GNSS_GPS_L1}>GPS L1 C/A (USA)</MenuItem>
+          <MenuItem value={Protocol.GNSS_GALILEO_E1}>Galileo E1 (Europe)</MenuItem>
+          <MenuItem value={Protocol.GNSS_GLONASS_L1}>GLONASS L1OF (Russia)</MenuItem>
+          <MenuItem value={Protocol.GNSS_BEIDOU_B1I}>BeiDou B1I (China)</MenuItem>
           <MenuItem disabled value={""}>ISM bands</MenuItem>
           <MenuItem value={Protocol.GateTX24}>GateTX (24bit)</MenuItem>
         </Select>
@@ -179,6 +289,55 @@ return (
           <MenuItem value={1000000000}>GHz</MenuItem>
         </Select>
       </Stack>
+    </FormControl>
+
+    <FormControl>
+      <Label>Bias-T (Active Antenna Power)</Label>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <input
+          type="checkbox"
+          id="biastCheckbox"
+          disabled={radio?.isPlaying()}
+          checked={biasTEnabled}
+          onChange={(e) => setBiasTEnabled(e.target.checked)}
+          style={{ width: '20px', height: '20px', cursor: radio?.isPlaying() ? 'not-allowed' : 'pointer' }}
+        />
+        <label htmlFor="biastCheckbox" style={{ cursor: radio?.isPlaying() ? 'not-allowed' : 'pointer' }}>
+          {biasTEnabled ? 'ON (5V power to antenna)' : 'OFF'}
+        </label>
+      </Box>
+    </FormControl>
+
+    <FormControl>
+      <Label>Interference Mitigation (Notch Filter + AGC + Pulse Blanking)</Label>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <input
+          type="checkbox"
+          id="filterCheckbox"
+          disabled={radio?.isPlaying()}
+          checked={filterEnabled}
+          onChange={(e) => setFilterEnabled(e.target.checked)}
+          style={{ width: '20px', height: '20px', cursor: radio?.isPlaying() ? 'not-allowed' : 'pointer' }}
+        />
+        <label htmlFor="filterCheckbox" style={{ cursor: radio?.isPlaying() ? 'not-allowed' : 'pointer' }}>
+          {filterEnabled ? 'ENABLED (removes CW jamming)' : 'DISABLED'}
+        </label>
+      </Box>
+      {filterEnabled && (
+        <Box sx={{ mt: 1, pl: 4 }}>
+          <label htmlFor="notchFreq" style={{ fontSize: '0.9em' }}>
+            Notch Frequency (Hz, 0=auto-detect):
+          </label>
+          <input
+            type="number"
+            id="notchFreq"
+            disabled={radio?.isPlaying()}
+            value={notchFrequency}
+            onChange={(e) => setNotchFrequency(parseInt(e.target.value) || 0)}
+            style={{ marginLeft: '10px', width: '100px' }}
+          />
+        </Box>
+      )}
     </FormControl>
   </Box>
   <Box

@@ -14,7 +14,7 @@
 
 import { Demodulator as AdsBDemodulator } from '../protocol/ads-b/demodulator.js'
 import { Demodulator as IsmDemodulator } from '../protocol/ism/demodulator.ts'
-import { Protocol } from '../protocol/protocol.ts'
+import { Protocol, isGNSS } from '../protocol/protocol.ts'
 
 /** Interface for classes that get samples from a Radio class. */
 export interface SampleReceiver {
@@ -89,7 +89,7 @@ export class LoggingReceiver implements SampleReceiver {
 
 
     if (this.protocol === Protocol.ADSB) {
-      // for now we only have ADS-B demodulation
+      // ADS-B demodulation
       this.adsBDemodulator.process(samples, 256000, (msg) => {
         console.log(msg);
         const nonEmptyFields = {};
@@ -104,7 +104,17 @@ export class LoggingReceiver implements SampleReceiver {
           decoded: JSON.stringify(nonEmptyFields)
         });
       });
+    } else if (isGNSS(this.protocol)) {
+      // GNSS processing - pass raw buffer to callback
+      // The actual GNSS demodulation happens in RtlDecoder.tsx
+      console.log(`[LoggingReceiver] Passing ${samples.length} samples to GNSS callback`);
+      this.onMsg({
+        time: new Date(),
+        msg: samples,
+        decoded: 'GNSS'
+      });
     } else {
+      // ISM demodulation
       this.ismDemodulator.process(samples, 256000, (msg) => {
         this.onMsg(msg);
       });

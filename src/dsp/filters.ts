@@ -280,3 +280,156 @@ export class FrequencyShifter {
     this.sine = sine;
   }
 }
+
+/**
+ * Signal quality metrics for GNSS and other applications
+ */
+export class SignalQuality {
+  /**
+   * Calculate Signal-to-Noise Ratio (SNR)
+   */
+  static calculateSNR(signal: Float32Array, noise: Float32Array): number {
+    const signalPower = this.calculatePower(signal);
+    const noisePower = this.calculatePower(noise);
+    return 10 * Math.log10(signalPower / (noisePower + 1e-10));
+  }
+
+  /**
+   * Calculate average power
+   */
+  static calculatePower(samples: Float32Array): number {
+    let sum = 0;
+    for (let i = 0; i < samples.length; i++) {
+      sum += samples[i] * samples[i];
+    }
+    return sum / samples.length;
+  }
+
+  /**
+   * Calculate Root Mean Square (RMS)
+   */
+  static calculateRMS(samples: Float32Array): number {
+    return Math.sqrt(this.calculatePower(samples));
+  }
+
+  /**
+   * Estimate noise floor from samples
+   */
+  static estimateNoiseFloor(samples: Float32Array, percentile: number = 0.1): number {
+    const sorted = new Float32Array(samples);
+    sorted.sort((a, b) => Math.abs(a) - Math.abs(b));
+    const index = Math.floor(sorted.length * percentile);
+    return Math.abs(sorted[index]);
+  }
+
+  /**
+   * Calculate peak-to-average power ratio (PAPR)
+   */
+  static calculatePAPR(samples: Float32Array): number {
+    let maxPower = 0;
+    let avgPower = 0;
+
+    for (let i = 0; i < samples.length; i++) {
+      const power = samples[i] * samples[i];
+      avgPower += power;
+      if (power > maxPower) {
+        maxPower = power;
+      }
+    }
+
+    avgPower /= samples.length;
+    return 10 * Math.log10(maxPower / (avgPower + 1e-10));
+  }
+}
+
+/**
+ * Band-pass filter using cascaded FIR filters
+ */
+export class BandPassFilter implements Filter {
+  private highPassFilter: FIRFilter;
+  private lowPassFilter: FIRFilter;
+
+  constructor(
+    sampleRate: number,
+    lowCutoff: number,
+    highCutoff: number,
+    kernelLength: number = 51
+  ) {
+    // Create high-pass coefficients (invert low-pass)
+    const lowPassCoefs = this.generateLowPassCoefficients(
+      sampleRate,
+      lowCutoff,
+      kernelLength
+    );
+    const highPassCoefs = this.invertCoefficients(lowPassCoefs);
+
+    // Create low-pass coefficients
+    const bandLimitCoefs = this.generateLowPassCoefficients(
+      sampleRate,
+      highCutoff,
+      kernelLength
+    );
+
+    this.highPassFilter = new FIRFilter(highPassCoefs);
+    this.lowPassFilter = new FIRFilter(bandLimitCoefs);
+  }
+
+  private generateLowPassCoefficients(
+    sampleRate: number,
+    cutoffFreq: number,
+    length: number
+  ): Float32Array {
+    const coefs = new Float32Array(length);
+    const fc = cutoffFreq / sampleRate;
+    const center = (length - 1) / 2;
+    let sum = 0;
+
+    for (let i = 0; i < length; i++) {
+      const x = i - center;
+      if (x === 0) {
+        coefs[i] = 2 * Math.PI * fc;
+      } else {
+        coefs[i] = Math.sin(2 * Math.PI * fc * x) / x;
+      }
+      // Hamming window
+      const window = 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / (length - 1));
+      coefs[i] *= window;
+      sum += coefs[i];
+    }
+
+    // Normalize
+    for (let i = 0; i < length; i++) {
+      coefs[i] /= sum;
+    }
+
+    return coefs;
+  }
+
+  private invertCoefficients(coefs: Float32Array): Float32Array {
+    const inverted = new Float32Array(coefs.length);
+    const center = Math.floor(coefs.length / 2);
+
+    for (let i = 0; i < coefs.length; i++) {
+      inverted[i] = -coefs[i];
+    }
+    inverted[center] += 1; // Add impulse at center
+
+    return inverted;
+  }
+
+  clone(): BandPassFilter {
+    const copy = Object.create(BandPassFilter.prototype);
+    copy.highPassFilter = this.highPassFilter.clone();
+    copy.lowPassFilter = this.lowPassFilter.clone();
+    return copy;
+  }
+
+  delay(): number {
+    return this.highPassFilter.delay() + this.lowPassFilter.delay();
+  }
+
+  inPlace(samples: Float32Array): void {
+    this.highPassFilter.inPlace(samples);
+    this.lowPassFilter.inPlace(samples);
+  }
+}
