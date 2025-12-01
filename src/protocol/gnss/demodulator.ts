@@ -118,8 +118,24 @@ export class GNSSDemodulator {
 
       console.log(`[GNSS] Buffer full (${this.sampleBuffer.length} samples), analyzing...`);
 
-      // Step 1: Analyze for jamming
-      const jammingMetrics = this.jammingDetector.analyze(this.sampleBuffer);
+      // Step 1: Search for satellites first (to get SNR for accurate J/S calculation)
+      console.log(`[GNSS] Searching for ${this.getConstellationName()} satellites...`);
+      let satellites = this.processBufferWithSamples(this.sampleBuffer);
+
+      // Get best SNR from found satellites (if any)
+      const bestSnr = satellites.length > 0
+        ? Math.max(...satellites.map(s => s.snr))
+        : undefined;
+
+      if (satellites.length > 0) {
+        console.log(
+          `[GNSS] Found ${satellites.length} satellite(s)!`,
+          satellites.map(s => `${this.getIdLabel()} ${s.prn}: SNR ${s.snr.toFixed(1)}dB, Doppler ${s.dopplerHz.toFixed(0)}Hz`)
+        );
+      }
+
+      // Step 2: Analyze for jamming with actual signal SNR
+      const jammingMetrics = this.jammingDetector.analyze(this.sampleBuffer, bestSnr);
 
       // Log jamming status
       if (jammingMetrics.isJammed) {
@@ -131,25 +147,28 @@ export class GNSSDemodulator {
           `Confidence: ${(jammingMetrics.jammerConfidence * 100).toFixed(0)}%`
         );
       } else {
-        console.log(`[GNSS] No jamming detected. Noise: ${jammingMetrics.noisePowerDbm.toFixed(1)} dBm`);
+        console.log(`[GNSS] No jamming detected. Noise floor: ${jammingMetrics.noiseFloorDb.toFixed(1)} dB (relative)`);
       }
 
-      // Step 2: Apply interference mitigation if jammed
+      // Step 3: Apply interference mitigation if jammed, then re-search
       let processedSamples = this.sampleBuffer;
       if (jammingMetrics.isJammed) {
         processedSamples = this.mitigation.mitigateSamples(this.sampleBuffer, jammingMetrics);
+
+        // Re-search after mitigation
+        console.log(`[GNSS] Re-searching after mitigation...`);
+        satellites = this.processBufferWithSamples(processedSamples);
+
+        if (satellites.length > 0) {
+          console.log(
+            `[GNSS] After mitigation: Found ${satellites.length} satellite(s)!`,
+            satellites.map(s => `${this.getIdLabel()} ${s.prn}: SNR ${s.snr.toFixed(1)}dB`)
+          );
+        }
       }
 
-      // Step 3: Search for satellites in mitigated signal
-      console.log(`[GNSS] Searching for ${this.getConstellationName()} satellites...`);
-      const satellites = this.processBufferWithSamples(processedSamples);
-
-      if (satellites.length > 0) {
-        console.log(
-          `[GNSS] Found ${satellites.length} satellite(s)!`,
-          satellites.map(s => `${this.getIdLabel()} ${s.prn}: SNR ${s.snr.toFixed(1)}dB, Doppler ${s.dopplerHz.toFixed(0)}Hz`)
-        );
-      } else {
+      // Final status
+      if (satellites.length === 0) {
         if (jammingMetrics.isJammed) {
           console.log('[GNSS] No satellites acquired - JAMMING PREVENTING ACQUISITION');
         } else {

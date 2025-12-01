@@ -29,9 +29,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 export interface JammingMetrics {
-  // Signal strength metrics
-  noisePowerDbm: number;          // Total noise power
-  signalPowerDbm: number;         // Expected GNSS signal power
+  // Signal strength metrics (relative dB, not calibrated dBm)
+  noiseFloorDb: number;           // Noise floor power in dB (relative)
+  totalPowerDb: number;           // Total received power in dB (relative)
+  signalPowerDb: number;          // GNSS signal power in dB (relative, from correlation)
   jammingToSignalRatio: number;   // J/S ratio in dB
 
   // Jamming detection
@@ -80,17 +81,41 @@ export class GNSSJammingDetector {
 
   /**
    * Analyze samples for jamming
+   * signalSnr: Optional SNR from satellite correlation (if satellites were found)
    */
-  analyze(samples: Float32Array): JammingMetrics {
-    // Calculate basic power metrics
-    const noisePower = this.calculatePower(samples);
-    const noisePowerDbm = 10 * Math.log10(noisePower * 1000); // Convert to dBm
+  analyze(samples: Float32Array, signalSnr?: number): JammingMetrics {
+    // Calculate total received power (in relative dB scale)
+    const totalPower = this.calculatePower(samples);
+    const totalPowerDb = 10 * Math.log10(totalPower);
 
-    // Expected GNSS signal power at antenna (very weak!)
-    const signalPowerDbm = -130; // Typical GPS C/A signal at antenna
+    // Calculate noise floor (estimate from lower percentile of sample powers)
+    const noiseFloor = this.estimateNoiseFloor(samples);
+    const noiseFloorDb = 10 * Math.log10(noiseFloor);
 
-    // Calculate J/S ratio
-    const jammingToSignalRatio = noisePowerDbm - signalPowerDbm;
+    // If we have actual satellite SNR, use it to calculate signal power
+    // Otherwise, assume typical GPS signal is buried ~20dB below noise
+    let signalPowerDb: number;
+    let jammingToSignalRatio: number;
+
+    if (signalSnr !== undefined && signalSnr > 0) {
+      // We found satellites! Calculate signal power from SNR
+      // SNR is the ratio: Signal Power / Noise Floor
+      signalPowerDb = noiseFloorDb + 10 * Math.log10(signalSnr);
+
+      // J/S = Jamming Power / Signal Power
+      // Jamming Power ≈ Total Power - Signal Power (in linear domain)
+      const totalPowerLinear = totalPower;
+      const signalPowerLinear = noiseFloor * signalSnr;
+      const jammingPowerLinear = Math.max(totalPowerLinear - signalPowerLinear, noiseFloor);
+      jammingToSignalRatio = 10 * Math.log10(jammingPowerLinear / signalPowerLinear);
+    } else {
+      // No satellites found - assume signal is at typical GPS level
+      // GPS C/A signal is typically 20-25 dB below noise floor
+      signalPowerDb = noiseFloorDb - 23; // Typical GPS C/A at receiver
+
+      // All received power is considered jamming/noise
+      jammingToSignalRatio = totalPowerDb - signalPowerDb;
+    }
 
     // Perform FFT for spectrum analysis
     const spectrum = this.computeFFT(samples);
@@ -98,11 +123,11 @@ export class GNSSJammingDetector {
 
     // Calculate statistical metrics
     const kurtosis = this.calculateKurtosis(samples);
-    const agcLevel = this.estimateAGC(noisePower);
+    const agcLevel = totalPowerDb - noiseFloorDb; // How much above noise floor
 
     // Detect jamming type
     const jammingType = this.detectJammingType(
-      noisePowerDbm,
+      totalPowerDb,
       spectrum,
       kurtosis,
       peakInfo
@@ -116,14 +141,15 @@ export class GNSSJammingDetector {
     );
 
     // Update history
-    this.powerHistory.push(noisePowerDbm);
+    this.powerHistory.push(totalPowerDb);
     if (this.powerHistory.length > this.historyLength) {
       this.powerHistory.shift();
     }
 
     return {
-      noisePowerDbm,
-      signalPowerDbm,
+      noiseFloorDb,
+      totalPowerDb,
+      signalPowerDb,
       jammingToSignalRatio,
       isJammed: jammingToSignalRatio > 20, // J/S > 20 dB indicates jamming
       jammingType,
@@ -136,6 +162,23 @@ export class GNSSJammingDetector {
       correlationLoss: Math.min(jammingToSignalRatio / 10, 100),
       timestamp: Date.now()
     };
+  }
+
+  /**
+   * Estimate noise floor from sample distribution
+   * Uses lower percentile to avoid being skewed by strong signals/jamming
+   */
+  private estimateNoiseFloor(samples: Float32Array): number {
+    // Calculate instantaneous power for each sample
+    const powers: number[] = [];
+    for (let i = 0; i < samples.length; i++) {
+      powers.push(samples[i] * samples[i]);
+    }
+
+    // Sort and take 25th percentile as noise floor estimate
+    powers.sort((a, b) => a - b);
+    const percentileIndex = Math.floor(powers.length * 0.25);
+    return powers[percentileIndex] || 1e-10; // Avoid log(0)
   }
 
   /**
@@ -180,7 +223,8 @@ export class GNSSJammingDetector {
     let maxPower = 0;
     let maxIndex = 0;
 
-    for (let i = 0; i < spectrum.length; i++) {
+    // Skip DC bin (index 0) and nearby bins to avoid DC offset
+    for (let i = 5; i < spectrum.length; i++) {
       if (spectrum[i] > maxPower) {
         maxPower = spectrum[i];
         maxIndex = i;

@@ -136,7 +136,11 @@ return (
 
                     // Jamming status (if present)
                     if (result.jamming.isJammed) {
-                      decoded += `⚠️ JAMMING: ${result.jamming.jammingType} (J/S: ${result.jamming.jammingToSignalRatio.toFixed(1)}dB, Freq: ${result.jamming.peakFrequencyHz.toFixed(0)}Hz) | `;
+                      // Show frequency only for CW tone jamming (not broadband noise)
+                      const freqInfo = (result.jamming.jammingType === 'CW_TONE' || result.jamming.jammingType === 'SWEPT_CW')
+                        ? `, Freq: ${(result.jamming.peakFrequencyHz / 1000).toFixed(1)}kHz`
+                        : '';
+                      decoded += `⚠️ JAMMING: ${result.jamming.jammingType} (J/S: ${result.jamming.jammingToSignalRatio.toFixed(1)}dB${freqInfo}) | `;
                     }
 
                     // Satellite info

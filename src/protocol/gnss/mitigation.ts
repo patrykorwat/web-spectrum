@@ -56,12 +56,12 @@ export class InterferenceMitigation {
 
     // 4. Spectral subtraction for broadband noise
     if (jamming.jammingType === JammingType.BROADBAND_NOISE) {
-      mitigated = this.spectralSubtraction(mitigated, jamming.noisePowerDbm);
+      mitigated = this.spectralSubtraction(mitigated, jamming.noiseFloorDb);
     }
 
     const power = this.calculatePower(mitigated);
-    const powerDbm = 10 * Math.log10(power * 1000);
-    console.log(`[MITIGATION] Original power: ${jamming.noisePowerDbm.toFixed(1)} dBm, After mitigation: ${powerDbm.toFixed(1)} dBm, Reduction: ${(jamming.noisePowerDbm - powerDbm).toFixed(1)} dB`);
+    const powerDb = 10 * Math.log10(power);
+    console.log(`[MITIGATION] Original power: ${jamming.totalPowerDb.toFixed(1)} dB, After mitigation: ${powerDb.toFixed(1)} dB, Reduction: ${(jamming.totalPowerDb - powerDb).toFixed(1)} dB`);
 
     return mitigated;
   }
@@ -159,11 +159,11 @@ export class InterferenceMitigation {
   /**
    * Spectral subtraction for broadband noise
    */
-  private spectralSubtraction(samples: Float32Array, noiseFloorDbm: number): Float32Array {
+  private spectralSubtraction(samples: Float32Array, noiseFloorDb: number): Float32Array {
     // Simple time-domain implementation
     // In production, this would use FFT-based spectral subtraction
     const output = new Float32Array(samples.length);
-    const noiseEstimate = Math.pow(10, noiseFloorDbm / 10) / 1000;
+    const noiseEstimate = Math.pow(10, noiseFloorDb / 10);
 
     for (let i = 0; i < samples.length; i++) {
       const power = samples[i] * samples[i];
