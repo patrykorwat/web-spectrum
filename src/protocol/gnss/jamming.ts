@@ -109,12 +109,23 @@ export class GNSSJammingDetector {
       const jammingPowerLinear = Math.max(totalPowerLinear - signalPowerLinear, noiseFloor);
       jammingToSignalRatio = 10 * Math.log10(jammingPowerLinear / signalPowerLinear);
     } else {
-      // No satellites found - assume signal is at typical GPS level
+      // No satellites found - cannot calculate accurate J/S ratio
       // GPS C/A signal is typically 20-25 dB below noise floor
       signalPowerDb = noiseFloorDb - 23; // Typical GPS C/A at receiver
 
-      // All received power is considered jamming/noise
-      jammingToSignalRatio = totalPowerDb - signalPowerDb;
+      // Check if total power is significantly elevated above noise floor
+      // This indicates possible jamming/interference
+      // For normal conditions: totalPower ≈ noiseFloor (within ~3-6 dB)
+      // Only flag as jamming if power is significantly elevated (>10 dB above noise floor)
+      const powerElevationDb = totalPowerDb - noiseFloorDb;
+
+      if (powerElevationDb > 10) {
+        // Elevated power - calculate J/S assuming signal at typical GPS level
+        jammingToSignalRatio = totalPowerDb - signalPowerDb;
+      } else {
+        // Normal noise floor - no jamming
+        jammingToSignalRatio = 0;
+      }
     }
 
     // Perform FFT for spectrum analysis
@@ -288,15 +299,14 @@ export class GNSSJammingDetector {
    * Detect type of jamming
    */
   private detectJammingType(
-    noisePowerDbm: number,
+    totalPowerDb: number,
     spectrum: Float32Array,
     kurtosis: number,
     peakInfo: { frequency: number, bandwidth: number }
   ): JammingType {
-    // Check if jammed at all
-    if (noisePowerDbm < this.noiseThresholdDb + 10) {
-      return JammingType.NONE;
-    }
+    // totalPowerDb is relative (not calibrated), so we can't use absolute thresholds
+    // This check is performed in the analyze() method using power elevation
+    // If we're here, assume some interference is present
 
     // Pulsed jamming: high kurtosis
     if (kurtosis > 5) {

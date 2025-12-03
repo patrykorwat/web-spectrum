@@ -45,6 +45,7 @@ import NavigateNextRoundedIcon from '@mui/icons-material/NavigateNextRounded';
 import Spectrum from './pages/Spectrum.tsx';
 import Decoder from './pages/Decoder.tsx';
 import RtlDecoder from './pages/RtlDecoder.tsx';
+import SdrPlayDecoder from './pages/SdrPlayDecoder.tsx';
 import { Button } from '@mui/material';
 
 // eslint-disable-next-line no-extend-native
@@ -114,6 +115,8 @@ const mainListItems = [
   { text: 'Spectrum', icon: <EqualizerIcon /> },
   { text: 'Decode', icon: <TroubleshootIcon /> },
   { group: 'RTL-SDR'},
+  { text: 'Decode', icon: <TroubleshootIcon /> },
+  { group: 'SDRPlay'},
   { text: 'Decode', icon: <TroubleshootIcon /> },
 ];
 
@@ -202,13 +205,15 @@ return (
               separator={<NavigateNextRoundedIcon fontSize="small" />}
             >
               <Typography variant="body1">Web Spectrum</Typography>
-              <Typography variant="body1">{menuSelection < 3 ? 'TinySA Ultra' : 'RTL-SDR'}</Typography>
+              <Typography variant="body1">
+                {menuSelection < 3 ? 'TinySA Ultra' : (menuSelection < 5 ? 'RTL-SDR' : 'SDRPlay')}
+              </Typography>
               <Typography variant="body1" sx={{ color: 'text.primary', fontWeight: 600 }}>
                 {mainListItems[menuSelection].text}
               </Typography>
             </StyledBreadcrumbs>
           </Stack>
-          { menuSelection === 1 ? <Spectrum /> : (menuSelection === 2 ? <Decoder /> : <RtlDecoder />) }          
+          { menuSelection === 1 ? <Spectrum /> : (menuSelection === 2 ? <Decoder /> : (menuSelection === 4 ? <RtlDecoder /> : (menuSelection === 6 ? <SdrPlayDecoder /> : <RtlDecoder />))) }          
         </Stack>
       </Box>
     </Box>

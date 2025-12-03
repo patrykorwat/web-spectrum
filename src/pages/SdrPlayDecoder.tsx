@@ -29,6 +29,7 @@ import { LineChart } from '@mui/x-charts/LineChart';
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
 
 import Label from '../components/Label.tsx';
 import NumberInput from '../components/NumberInput.tsx';
@@ -42,8 +43,6 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Paper from '@mui/material/Paper';
 
-import { RTL2832U_Provider } from "../device/rtlsdr/rtl2832u.ts";
-import { Radio } from '../device/radio.ts';
 import { LoggingReceiver } from '../device/sample_receiver.ts';
 import { FilteringSampleReceiver, FilterConfig } from '../device/filter_receiver.ts';
 import { WebSocketReceiver } from '../device/websocket_receiver.ts';
@@ -57,17 +56,18 @@ const toHex = (buffer: Uint8Array) => {
   return Array.prototype.map.call(buffer, (x: number) => ('00' + x.toString(16)).slice(-2)).join('');
 }
 
-function RtlDecoder() {
-  const [radio, setRadio] = useState<Radio>();
-  const [protocol, setProtocol] = useState<Protocol>(Protocol.ADSB);
-  const [frequency, setFrequency] = useState<number>(1090);
+function SdrPlayDecoder() {
+  const [protocol, setProtocol] = useState<Protocol>(Protocol.GNSS_GPS_L1);
+  const [frequency, setFrequency] = useState<number>(1575.42);
   const [frequencyMag, setFrequencyMag] = useState<number>(1000000);
-  const [biasTEnabled, setBiasTEnabled] = useState<boolean>(false);
 
-  // Input source selection
-  const [inputSource, setInputSource] = useState<'USB' | 'WebSocket'>('USB');
+  // WebSocket connection
   const [websocketUrl, setWebsocketUrl] = useState<string>('ws://localhost:8765');
   const [websocketReceiver, setWebsocketReceiver] = useState<WebSocketReceiver | null>(null);
+
+  // RSPduo-specific settings
+  const [tunerSelection, setTunerSelection] = useState<number>(1);
+  const [biasTeeEnabled, setBiasTeeEnabled] = useState<boolean>(false);
 
   // Interference mitigation filter state
   const [filterEnabled, setFilterEnabled] = useState<boolean>(false);
@@ -100,26 +100,24 @@ function RtlDecoder() {
 return (
   <Container maxWidth="lg">
     <Box display="flex"
+      flexWrap="wrap"
       justifyContent="center"
-      alignItems="center"
+      alignItems="flex-start"
+      gap={3}
       minHeight="10vh"
       sx={{ marginBottom: '30px' }}>
 
-      <Stack spacing={2} sx={{ marginRight: '30px' }}>
+      <Stack spacing={2}>
         <ButtonGroup variant="contained" aria-label="Basic button group">
-        <Button disabled={radio?.isPlaying() || websocketReceiver?.isConnected()} onClick={ async () => {
+        <Button disabled={websocketReceiver?.isConnected()} onClick={ async () => {
           const freqHz = frequency*frequencyMag;
-          console.log("frequency to be set", freqHz);
+          console.log(`[SDRPlay WebSocket] Connecting to ${websocketUrl} for ${protocol}`);
 
-            // WebSocket input source
-            if (inputSource === 'WebSocket') {
-              console.log(`[WebSocket] Starting WebSocket receiver from ${websocketUrl}`);
+          // Store filter receiver ref for dynamic updates
+          let filterReceiverRef: FilteringSampleReceiver | null = null;
 
-              // Store filter receiver ref for dynamic updates
-              let filterReceiverRef: FilteringSampleReceiver | null = null;
-
-              // Create the logging receiver
-              const loggingReceiver = new LoggingReceiver(protocol, (msg) => {
+          // Create the logging receiver
+          const loggingReceiver = new LoggingReceiver(protocol, (msg) => {
                 if (protocol === Protocol.ADSB) {
                   setDecodedItems(prevDecodedItems => {
                     return [msg, ...prevDecodedItems];
@@ -213,140 +211,20 @@ return (
                 gnssDemodulator.setProtocol(protocol);
               }
 
-              // Create and connect WebSocket receiver
-              const wsReceiver = new WebSocketReceiver(websocketUrl, sampleReceiver);
-              try {
-                await wsReceiver.connect();
-                setWebsocketReceiver(wsReceiver);
-                console.log('[WebSocket] Connected and streaming!');
-              } catch (error) {
-                console.error('[WebSocket] Failed to connect:', error);
-                alert(`Failed to connect to WebSocket server at ${websocketUrl}\n\nMake sure the SDRPlay bridge is running:\npython sdrplay_bridge.py`);
-              }
-
-            // USB (RTL-SDR) input source
-            } else if (radio === undefined) {
-              const rtlProvider = new RTL2832U_Provider();
-
-              // Store filter receiver ref for dynamic updates
-              let filterReceiverRef: FilteringSampleReceiver | null = null;
-
-              // Create the logging receiver
-              const loggingReceiver = new LoggingReceiver(protocol, (msg) => {
-                if (protocol === Protocol.ADSB) {
-                  setDecodedItems(prevDecodedItems => {
-                    return [msg, ...prevDecodedItems];
-                  });
-                } else if (isGNSS(protocol)) {
-                  // GNSS processing
-                  console.log(`[RtlDecoder] GNSS callback received, msg.msg type: ${msg.msg?.constructor?.name}, length: ${msg.msg?.length}`);
-                  // Protocol is set once when radio starts, not on every sample batch
-                  const result = gnssDemodulator.processSamples(msg.msg.buffer);
-                  if (result) {
-                    // Auto-update notch filter frequency if CW jamming detected
-                    if (result.jamming.isJammed && result.jamming.jammingType === 'CW_TONE' && filterReceiverRef) {
-                      const detectedFreq = result.jamming.peakFrequencyHz;
-                      console.log(`[AUTO-FILTER] CW tone detected at ${detectedFreq.toFixed(0)} Hz, updating notch filter`);
-                      filterReceiverRef.updateConfig({
-                        notchFrequencyHz: detectedFreq
-                      });
-                      setNotchFrequency(Math.round(detectedFreq));
-                    }
-
-                    // Create a message object for display with jamming info
-                    let decoded = '';
-
-                    // Jamming status (if present)
-                    if (result.jamming.isJammed) {
-                      // Show frequency only for CW tone jamming (not broadband noise)
-                      const freqInfo = (result.jamming.jammingType === 'CW_TONE' || result.jamming.jammingType === 'SWEPT_CW')
-                        ? `, Freq: ${(result.jamming.peakFrequencyHz / 1000).toFixed(1)}kHz`
-                        : '';
-                      decoded += `⚠️ JAMMING: ${result.jamming.jammingType} (J/S: ${result.jamming.jammingToSignalRatio.toFixed(1)}dB${freqInfo}) | `;
-                    }
-
-                    // Satellite info
-                    if (result.satellites.length > 0) {
-                      decoded += `${result.satellites.length} sat(s): ${result.satellites.map(s => `${s.prn}(${s.snr.toFixed(1)}dB)`).join(', ')}`;
-                    } else if (result.jamming.isJammed) {
-                      decoded += 'No satellites - jammed';
-                    } else {
-                      decoded += `No satellites | Noise: ${result.jamming.noiseFloorDb.toFixed(1)}dB (relative)`;
-                    }
-
-                    const gnssMsg = {
-                      decoded,
-                      time: new Date(result.timestamp),
-                      msg: result
-                    };
-                    setDecodedItems(prevDecodedItems => {
-                      return [gnssMsg, ...prevDecodedItems];
-                    });
-                  }
-                } else {
-                  setPowerLevels(prevMsg => {
-                    if (prevMsg.length > pointsBatch-1000) {
-                      const groups = ismDemodulator.detectPulses(protocol, prevMsg, 0.050, 10000);
-                      setDecodedItems(prevDecodedItems => {
-                        return [...groups, ...prevDecodedItems];
-                      });
-                      return msg;
-                    } else {
-                      return [...prevMsg, ...msg];
-                    }
-                  });
-                }
-              });
-
-              // Wrap in filtering receiver if enabled
-              let sampleReceiver = loggingReceiver;
-              if (filterEnabled) {
-                const filterConfig: FilterConfig = {
-                  notchFilterEnabled: true,
-                  notchFrequencyHz: notchFrequency || 0, // Will auto-detect if 0
-                  notchBandwidthHz: 1000, // 1 kHz notch width
-                  agcLimitEnabled: true,
-                  agcTargetPower: 0.1, // -10dB target
-                  pulseBlankingEnabled: true,
-                  pulseThresholdMultiplier: 3.0
-                };
-
-                const filteringReceiver = new FilteringSampleReceiver(loggingReceiver, filterConfig);
-                filterReceiverRef = filteringReceiver; // Set local ref
-                setFilterReceiver(filteringReceiver); // Set state
-                sampleReceiver = filteringReceiver;
-                console.log('[RTL-SDR] Interference mitigation filters ENABLED');
-              } else {
-                console.log('[RTL-SDR] Interference mitigation filters DISABLED');
-              }
-
-              const rtlRadio = new Radio(rtlProvider, sampleReceiver);
-              rtlRadio.setFrequency(freqHz);
-              rtlRadio.setGain(40);
-
-              // Enable Bias-T if requested (for active GNSS antennas)
-              if (biasTEnabled) {
-                console.log("[RTL-SDR] Enabling Bias-T for active antenna power");
-                rtlRadio.enableBiasTee(true);
-              }
-
-              // Set GNSS protocol once (not on every sample batch!)
-              if (isGNSS(protocol)) {
-                console.log(`[RTL-SDR] Setting GNSS protocol: ${protocol}`);
-                gnssDemodulator.setProtocol(protocol);
-              }
-
-              rtlRadio.start();
-              setRadio(rtlRadio);
-            } else {
-              radio.setFrequency(freqHz);
-              radio.start();
-            }
+          // Create and connect WebSocket receiver
+          const wsReceiver = new WebSocketReceiver(websocketUrl, sampleReceiver);
+          try {
+            await wsReceiver.connect();
+            setWebsocketReceiver(wsReceiver);
+            console.log('[SDRPlay WebSocket] Connected and streaming!');
+          } catch (error) {
+            console.error('[SDRPlay WebSocket] Failed to connect:', error);
+            const tunerArg = `--tuner ${tunerSelection}`;
+            const biasTeeArg = biasTeeEnabled ? ' --bias-tee' : '';
+            alert(`Failed to connect to WebSocket server at ${websocketUrl}\n\nMake sure the SDRPlay bridge is running:\n./run_sdrplay_bridge.sh --freq ${freqHz} --rate 2.048e6 --gain 40 ${tunerArg}${biasTeeArg}`);
+          }
       }}>Listen&Decode</Button>
-      <Button disabled={(radio === undefined || !radio.isPlaying()) && (websocketReceiver === null || !websocketReceiver.isConnected())} onClick={async ()=>{
-        if (radio) {
-          await radio.stop();
-        }
+      <Button disabled={websocketReceiver === null || !websocketReceiver.isConnected()} onClick={async ()=>{
         if (websocketReceiver) {
           websocketReceiver.disconnect();
           setWebsocketReceiver(null);
@@ -357,44 +235,27 @@ return (
       </Stack>
 
       <FormControl defaultValue="">
-        <Label>Input Source</Label>
+        <Label>WebSocket URL (SDRPlay Bridge)</Label>
         <Stack direction="row">
-          <Select
-            disabled={radio?.isPlaying() || websocketReceiver?.isConnected()}
-            value={inputSource}
-            onChange={(event: any) => setInputSource(event.target.value)}
-            sx={{ marginRight: '15px' }}
-          >
-            <MenuItem value="USB">RTL-SDR (USB)</MenuItem>
-            <MenuItem value="WebSocket">WebSocket (SDRPlay/Remote)</MenuItem>
-          </Select>
+          <TextField
+            disabled={websocketReceiver?.isConnected()}
+            aria-label="WebSocket URL"
+            placeholder="ws://localhost:8765"
+            value={websocketUrl}
+            onChange={(event) => setWebsocketUrl(event.target.value)}
+            sx={{ width: '300px' }}
+            size="small"
+            variant="outlined"
+          />
         </Stack>
       </FormControl>
-
-      {inputSource === 'WebSocket' && (
-        <FormControl defaultValue="">
-          <Label>WebSocket URL</Label>
-          <Stack direction="row">
-            <TextField
-              disabled={websocketReceiver?.isConnected()}
-              aria-label="WebSocket URL"
-              placeholder="ws://localhost:8765"
-              value={websocketUrl}
-              onChange={(event) => setWebsocketUrl(event.target.value)}
-              sx={{ width: '300px', marginRight: '15px' }}
-              size="small"
-              variant="outlined"
-            />
-          </Stack>
-        </FormControl>
-      )}
 
       <FormControl defaultValue="" >
       <Label>Protocol</Label>
 
       <Stack direction="row" >
         <Select
-          disabled={radio?.isPlaying()}
+          disabled={websocketReceiver?.isConnected()}
           value={protocol}
           onChange={(event) => {
             setProtocol(event.target.value);
@@ -418,7 +279,6 @@ return (
               setFrequencyMag(1000000);
             }
           }}
-          sx={{ marginRight: '15px' }}
         >
           <MenuItem value={Protocol.ADSB}>ADS-B</MenuItem>
           <MenuItem disabled value={""}>GNSS Constellations</MenuItem>
@@ -436,17 +296,16 @@ return (
       <Label>Tested frequency [Hz]</Label>
       <Stack direction="row" >
         <NumberInput
-          disabled={radio?.isPlaying()}
+          disabled={websocketReceiver?.isConnected()}
           aria-label="Tested frequency"
           placeholder="Type a number…"
           value={frequency}
           onChange={(_, val) => setFrequency(val)}
         />
         <Select
-          disabled={radio?.isPlaying()}
+          disabled={websocketReceiver?.isConnected()}
           value={frequencyMag}
           onChange={(event: any) => setFrequencyMag(event.target.value)}
-          sx={{ marginRight: '15px' }}
         >
           <MenuItem value={1}>Hz</MenuItem>
           <MenuItem value={1000}>kHz</MenuItem>
@@ -457,20 +316,38 @@ return (
     </FormControl>
 
     <FormControl>
-      <Label>Bias-T (Active Antenna Power)</Label>
+      <Label>RSPduo Tuner Selection</Label>
+      <Select
+        disabled={websocketReceiver?.isConnected()}
+        value={tunerSelection}
+        onChange={(event) => setTunerSelection(Number(event.target.value))}
+        sx={{ width: '150px' }}
+      >
+        <MenuItem value={1}>Tuner 1</MenuItem>
+        <MenuItem value={2}>Tuner 2</MenuItem>
+      </Select>
+    </FormControl>
+
+    <FormControl>
+      <Label>T-bias (RSPduo Tuner 2 only)</Label>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <input
           type="checkbox"
-          id="biastCheckbox"
-          disabled={radio?.isPlaying()}
-          checked={biasTEnabled}
-          onChange={(e) => setBiasTEnabled(e.target.checked)}
-          style={{ width: '20px', height: '20px', cursor: radio?.isPlaying() ? 'not-allowed' : 'pointer' }}
+          id="biasTeeCheckbox"
+          disabled={websocketReceiver?.isConnected()}
+          checked={biasTeeEnabled}
+          onChange={(e) => setBiasTeeEnabled(e.target.checked)}
+          style={{ width: '20px', height: '20px', cursor: websocketReceiver?.isConnected() ? 'not-allowed' : 'pointer' }}
         />
-        <label htmlFor="biastCheckbox" style={{ cursor: radio?.isPlaying() ? 'not-allowed' : 'pointer' }}>
-          {biasTEnabled ? 'ON (5V power to antenna)' : 'OFF'}
+        <label htmlFor="biasTeeCheckbox" style={{ cursor: websocketReceiver?.isConnected() ? 'not-allowed' : 'pointer' }}>
+          {biasTeeEnabled ? 'ENABLED (for active antenna)' : 'DISABLED'}
         </label>
       </Box>
+      {biasTeeEnabled && tunerSelection !== 2 && (
+        <Typography variant="caption" color="warning.main" sx={{ mt: 0.5 }}>
+          Warning: T-bias only works on Tuner 2
+        </Typography>
+      )}
     </FormControl>
 
     <FormControl>
@@ -479,12 +356,12 @@ return (
         <input
           type="checkbox"
           id="filterCheckbox"
-          disabled={radio?.isPlaying()}
+          disabled={websocketReceiver?.isConnected()}
           checked={filterEnabled}
           onChange={(e) => setFilterEnabled(e.target.checked)}
-          style={{ width: '20px', height: '20px', cursor: radio?.isPlaying() ? 'not-allowed' : 'pointer' }}
+          style={{ width: '20px', height: '20px', cursor: websocketReceiver?.isConnected() ? 'not-allowed' : 'pointer' }}
         />
-        <label htmlFor="filterCheckbox" style={{ cursor: radio?.isPlaying() ? 'not-allowed' : 'pointer' }}>
+        <label htmlFor="filterCheckbox" style={{ cursor: websocketReceiver?.isConnected() ? 'not-allowed' : 'pointer' }}>
           {filterEnabled ? 'ENABLED (removes CW jamming)' : 'DISABLED'}
         </label>
       </Box>
@@ -496,7 +373,7 @@ return (
           <input
             type="number"
             id="notchFreq"
-            disabled={radio?.isPlaying()}
+            disabled={websocketReceiver?.isConnected()}
             value={notchFrequency}
             onChange={(e) => setNotchFrequency(parseInt(e.target.value) || 0)}
             style={{ marginLeft: '10px', width: '100px' }}
@@ -549,4 +426,4 @@ return (
 );
 }
 
-export default RtlDecoder;
+export default SdrPlayDecoder;

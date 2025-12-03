@@ -1,7 +1,7 @@
 # web-spectrum
 Web app for spectrum analyzers.
 
-Visit [meshuga.github.io/web-spectrum](https://meshuga.github.io/web-spectrum/) to access the app.
+Visit [patrykorwat.github.io/web-spectrum](https://meshuga.github.io/web-spectrum/) to access the app.
 
 The application has two features:
 * Spectrum analyzer
@@ -10,6 +10,7 @@ The application has two features:
 Supported devices:
 * tinySA Ultra
 * RTL-SDR with RTL2832U (includes V4)
+* SDRPlay (tested with RSPduo) (via WebSocket-based bridge)
 
 Supported environments:
 * Chrome
@@ -35,8 +36,24 @@ The current implementation is able to decode 1 message at a given time of size a
 ![decode1](rtl-sdr-ads-b.jpg)
 ![decode2](rtl-sdr-ism.png)
 
-The current implementation decodes ADS-B signals as well following ISM protocols:
-* GateTX
+The current implementation decodes ADS-B signals as well following protocols:
+* ISM GateTX
+* GNSS
+** GPS L1
+** Galileo E1
+** GLONASS L1OF
+** BeiDou B1I
+
+### SDRPlay
+
+Warning: in order to setup SDRPlay, follow the instructions [SDRPlay Quickstart](./SDRPLAY_QUICKSTART.md) and [SDRPlay Setup](./SDRPLAY_SETUP.md)
+
+The current implementation decodes following protocols:
+* GNSS
+** GPS L1
+** Galileo E1
+** GLONASS L1OF
+** BeiDou B1I
 
 ## References
 
