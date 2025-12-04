@@ -36,13 +36,39 @@ The current implementation is able to decode 1 message at a given time of size a
 ![decode1](rtl-sdr-ads-b.jpg)
 ![decode2](rtl-sdr-ism.png)
 
-The current implementation decodes ADS-B signals as well following protocols:
+**Two modes available:**
+
+#### 1. Professional Mode (GNSS-SDR Backend) - **RECOMMENDED for GPS**
+Uses industry-standard GNSS-SDR software with RTL-SDR dongles:
+- ✅ Works with any RTL-SDR dongle (~$25-40)
+- ✅ Professional-grade GPS signal processing
+- ✅ Real satellite tracking with C/N0 measurements
+- ✅ Automatic WebSocket integration
+- ✅ **Single-command operation**
+
+📚 **Documentation:** [RTL-SDR GNSS Setup](./gnss-sdr/README_RTLSDR.md)
+
+**Quick Start:**
+```bash
+# Install GNSS-SDR (one-time setup)
+cd gnss-sdr
+./install_gnss_sdr.sh
+
+# Start GNSS-SDR with RTL-SDR
+./start_gnss_rtlsdr.sh
+
+# Browser:
+# 1. Open http://localhost:3005
+# 2. Go to SDRPlay Decoder page
+# 3. Click "Listen & Decode"
+# 4. See satellites in decode table!
+```
+
+#### 2. Browser Processing Mode
+Direct browser-based signal processing for ADS-B and ISM protocols:
+* ADS-B (aircraft tracking)
 * ISM GateTX
-* GNSS
-** GPS L1
-** Galileo E1
-** GLONASS L1OF
-** BeiDou B1I
+* Basic GNSS (GPS L1, Galileo E1, GLONASS L1OF, BeiDou B1I)
 
 ### SDRPlay
 
