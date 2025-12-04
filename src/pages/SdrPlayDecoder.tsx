@@ -16,13 +16,15 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 import Container from '@mui/material/Container';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import ButtonGroup from '@mui/material/ButtonGroup';
 import { FormControl } from '@mui/base/FormControl';
+import MuiFormControl from '@mui/material/FormControl';
+import LinearProgress from '@mui/material/LinearProgress';
 
 import { LineChart } from '@mui/x-charts/LineChart';
 
@@ -30,6 +32,10 @@ import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
+import Radio from '@mui/material/Radio';
+import RadioGroup from '@mui/material/RadioGroup';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import FormLabel from '@mui/material/FormLabel';
 
 import Label from '../components/Label.tsx';
 import NumberInput from '../components/NumberInput.tsx';
@@ -61,8 +67,12 @@ function SdrPlayDecoder() {
   const [frequency, setFrequency] = useState<number>(1575.42);
   const [frequencyMag, setFrequencyMag] = useState<number>(1000000);
 
+  // Bridge mode selection
+  const [bridgeMode, setBridgeMode] = useState<'sdrplay' | 'gnss-sdr'>('gnss-sdr');
+
   // WebSocket connection
-  const [websocketUrl, setWebsocketUrl] = useState<string>('ws://localhost:8765');
+  const defaultWebSocketUrl = bridgeMode === 'gnss-sdr' ? 'ws://localhost:8766' : 'ws://localhost:8765';
+  const [websocketUrl, setWebsocketUrl] = useState<string>(defaultWebSocketUrl);
   const [websocketReceiver, setWebsocketReceiver] = useState<WebSocketReceiver | null>(null);
 
   // RSPduo-specific settings
@@ -78,6 +88,16 @@ function SdrPlayDecoder() {
 
   const [powerLevels, setPowerLevels] = useState([]);
 
+  // Satellite tracking history for chart (last 60 data points)
+  const [satelliteHistory, setSatelliteHistory] = useState<Array<{time: number, count: number, avgCN0: number}>>([]);
+
+  // Progress tracking for recording and processing
+  const [progressPhase, setProgressPhase] = useState<string>('');
+  const [progressPercent, setProgressPercent] = useState<number>(0);
+  const [progressElapsed, setProgressElapsed] = useState<number>(0);
+  const [progressTotal, setProgressTotal] = useState<number>(0);
+  const [progressMessage, setProgressMessage] = useState<string>('');
+
   const pointsBatch = 10000;
 
   const xPoints: Array<number> = [];
@@ -87,6 +107,14 @@ function SdrPlayDecoder() {
 
   const ismDemodulator = new IsmDemodulator();
   const [gnssDemodulator] = useState(() => new GNSSDemodulator());
+
+  // Update WebSocket URL when bridge mode changes
+  useEffect(() => {
+    if (!websocketReceiver?.isConnected()) {
+      const newUrl = bridgeMode === 'gnss-sdr' ? 'ws://localhost:8766' : 'ws://localhost:8765';
+      setWebsocketUrl(newUrl);
+    }
+  }, [bridgeMode, websocketReceiver]);
 
   const download = () => {
     let lines = 'decoded,time,msg'
@@ -99,6 +127,193 @@ function SdrPlayDecoder() {
 
 return (
   <Container maxWidth="lg">
+    {/* Bridge Mode Selector */}
+    <Box sx={{ marginBottom: '20px', marginTop: '20px' }}>
+      <MuiFormControl>
+        <FormLabel id="bridge-mode-label">Signal Processing Mode</FormLabel>
+        <RadioGroup
+          row
+          aria-labelledby="bridge-mode-label"
+          name="bridge-mode-group"
+          value={bridgeMode}
+          onChange={(event) => setBridgeMode(event.target.value as 'sdrplay' | 'gnss-sdr')}
+        >
+          <FormControlLabel
+            value="sdrplay"
+            control={<Radio />}
+            label="Raw IQ Mode (Browser Processing)"
+            disabled={websocketReceiver?.isConnected()}
+          />
+          <FormControlLabel
+            value="gnss-sdr"
+            control={<Radio />}
+            label="Professional Mode (GNSS-SDR)"
+            disabled={websocketReceiver?.isConnected()}
+          />
+        </RadioGroup>
+        <Typography variant="caption" color="text.secondary" sx={{ marginTop: '5px' }}>
+          {bridgeMode === 'sdrplay'
+            ? '⚠️ Raw IQ: Browser-based correlation (simplified algorithms, high bandwidth)'
+            : '✅ Professional: Uses GNSS-SDR for accurate C/N0, positioning, and jamming detection'
+          }
+        </Typography>
+      </MuiFormControl>
+    </Box>
+
+    {/* Setup Instructions - Only show for GNSS-SDR mode when not connected */}
+    {bridgeMode === 'gnss-sdr' && !websocketReceiver?.isConnected() && (
+      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(33, 150, 243, 0.08)', borderRadius: '8px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
+        <Typography variant="h6" sx={{ marginBottom: '15px', color: 'info.main' }}>
+          📡 GNSS-SDR Setup Required
+        </Typography>
+        <Typography variant="body2" sx={{ marginBottom: '10px' }}>
+          Before clicking "Listen&Decode", run this ONE command in your terminal:
+        </Typography>
+        <Box sx={{
+          backgroundColor: 'rgba(0, 0, 0, 0.4)',
+          padding: '12px',
+          borderRadius: '4px',
+          fontFamily: 'monospace',
+          fontSize: '0.9em',
+          marginBottom: '10px'
+        }}>
+          cd gnss-sdr<br />
+          ./start_gnss.sh
+        </Box>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', marginBottom: '8px' }}>
+          This single script does EVERYTHING:
+        </Typography>
+        <Typography variant="caption" color="text.secondary" component="div" sx={{ paddingLeft: '15px' }}>
+          • Starts WebSocket bridge on port 8766<br />
+          • Records 5 min of GPS samples from SDRPlay<br />
+          • Processes with GNSS-SDR (satellites appear here!)<br />
+          • Repeats continuously for real-time tracking<br />
+          • Stop with Ctrl+C
+        </Typography>
+        <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', color: 'info.main', fontStyle: 'italic' }}>
+          ℹ️ First cycle takes 5-10 minutes (recording + ephemeris decoding). Be patient!
+        </Typography>
+
+        {/* Processing Timeline */}
+        <Box sx={{ marginTop: '15px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.3)', borderRadius: '4px' }}>
+          <Typography variant="caption" sx={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>
+            📊 Processing Timeline (First Cycle):
+          </Typography>
+          <Box sx={{ paddingLeft: '10px', fontSize: '0.85em' }}>
+            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
+              <span style={{ color: '#4CAF50' }}>⏱️ Min 0-5:</span> 📡 Recording GPS samples (5 minutes)
+            </Typography>
+            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
+              <span style={{ color: '#2196F3' }}>⏱️ Min 5-6:</span> 🛰️  Satellite acquisition (tracking starts)
+            </Typography>
+            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
+              <span style={{ color: '#FF9800' }}>⏱️ Min 6-8:</span> 📖 Ephemeris decoding (navigation data)
+            </Typography>
+            <Typography variant="caption" component="div" sx={{ color: '#4CAF50', fontWeight: 'bold' }}>
+              <span>⏱️ Min 8-10:</span> 📍 First position fix! → ✅ DATA APPEARS HERE!
+            </Typography>
+          </Box>
+        </Box>
+
+        <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', color: 'warning.main' }}>
+          ⚠️ Make sure your GPS antenna has a clear sky view!
+        </Typography>
+      </Box>
+    )}
+
+    {/* Satellite Acquisition Info - Only show for GNSS-SDR mode when connected */}
+    {bridgeMode === 'gnss-sdr' && websocketReceiver?.isConnected() && (
+      <Box sx={{ marginBottom: '20px', padding: '15px', backgroundColor: 'rgba(0, 255, 0, 0.05)', borderRadius: '8px', border: '1px solid rgba(0, 255, 0, 0.2)' }}>
+        <Typography variant="h6" sx={{ marginBottom: '10px', color: 'success.main' }}>
+          🛰️ Satellite Acquisition Status
+        </Typography>
+        <Box>
+          <Typography variant="body1" sx={{ marginBottom: '5px' }}>
+            {decodedItems.length > 0 && decodedItems[0].msg?.satellites ? (
+              <>
+                <strong>Satellites Tracking:</strong> {decodedItems[0].msg.satellites.length} satellite(s)
+                {decodedItems[0].msg.satellites.length > 0 && (
+                  <Box sx={{ marginTop: '10px', fontSize: '0.9em' }}>
+                    {decodedItems[0].msg.satellites.slice(0, 8).map((sat: any, idx: number) => (
+                      <Box key={idx} sx={{ marginBottom: '5px', paddingLeft: '20px' }}>
+                        • PRN {sat.prn}: C/N0 = {sat.cn0?.toFixed(1) || 'N/A'} dB-Hz,
+                        Doppler = {sat.dopplerHz?.toFixed(0) || 'N/A'} Hz,
+                        State = {sat.state || 'UNKNOWN'}
+                      </Box>
+                    ))}
+                    {decodedItems[0].msg.satellites.length > 8 && (
+                      <Box sx={{ paddingLeft: '20px', fontStyle: 'italic', color: 'text.secondary' }}>
+                        ... and {decodedItems[0].msg.satellites.length - 8} more
+                      </Box>
+                    )}
+                  </Box>
+                )}
+              </>
+            ) : (
+              <>
+                <strong>Status:</strong> Acquiring satellites... (this may take 30-60 seconds)
+                <br />
+                <Typography variant="caption" color="text.secondary">
+                  GNSS-SDR is processing signals. Satellite data will appear once acquisition completes.
+                </Typography>
+              </>
+            )}
+          </Typography>
+          {decodedItems.length > 0 && decodedItems[0].msg?.jamming && (
+            <Typography variant="body2" sx={{ marginTop: '10px', color: decodedItems[0].msg.jamming.isJammed ? 'error.main' : 'success.main' }}>
+              <strong>Jamming:</strong> {decodedItems[0].msg.jamming.isJammed ?
+                `⚠️ DETECTED (${decodedItems[0].msg.jamming.jammingType})` :
+                '✓ None detected'}
+            </Typography>
+          )}
+        </Box>
+
+        {/* Satellite Tracking History Chart */}
+        {satelliteHistory.length > 1 && (
+          <Box sx={{ marginTop: '15px' }}>
+            <Typography variant="h6" sx={{ marginBottom: '10px', fontSize: '0.95em' }}>
+              📈 Satellite Tracking History
+            </Typography>
+            <LineChart
+              width={900}
+              height={200}
+              series={[
+                {
+                  data: satelliteHistory.slice().reverse().map(p => p.count),
+                  label: 'Satellites',
+                  color: '#4CAF50',
+                  showMark: false
+                },
+                {
+                  data: satelliteHistory.slice().reverse().map(p => p.avgCN0 / 5), // Scale down to fit
+                  label: 'Avg C/N0 (/5)',
+                  color: '#2196F3',
+                  showMark: false
+                }
+              ]}
+              xAxis={[{
+                data: satelliteHistory.slice().reverse().map((_, i) => i),
+                label: 'Time (recent →)'
+              }]}
+              yAxis={[{
+                label: 'Count / C/N0 (scaled)'
+              }]}
+              slotProps={{
+                legend: {
+                  direction: 'row',
+                  position: { vertical: 'top', horizontal: 'middle' },
+                  padding: 0
+                }
+              }}
+            />
+            <Typography variant="caption" sx={{ display: 'block', marginTop: '5px', color: 'text.secondary', textAlign: 'center' }}>
+              Shows last {satelliteHistory.length} updates (~{Math.round(satelliteHistory.length / 60)} min of data)
+            </Typography>
+          </Box>
+        )}
+      </Box>
+    )}
+
     <Box display="flex"
       flexWrap="wrap"
       justifyContent="center"
@@ -125,8 +340,21 @@ return (
                 } else if (isGNSS(protocol)) {
                   // GNSS processing
                   console.log(`[RtlDecoder] GNSS callback received, msg.msg type: ${msg.msg?.constructor?.name}, length: ${msg.msg?.length}`);
-                  // Protocol is set once when radio starts, not on every sample batch
-                  const result = gnssDemodulator.processSamples(msg.msg.buffer);
+
+                  // Check if msg.msg is already a JSON result object (from parse_gnss_logs)
+                  // or if it's a Uint8Array buffer that needs processing
+                  let result;
+                  if (msg.msg && typeof msg.msg === 'object' && 'satellites' in msg.msg && 'protocol' in msg.msg) {
+                    // Already a GNSS result object from parse_gnss_logs.py
+                    console.log(`[RtlDecoder] Received pre-processed GNSS data with ${msg.msg.satellites.length} satellites`);
+                    result = msg.msg;
+                  } else if (msg.msg && msg.msg.buffer) {
+                    // Binary IQ samples that need processing
+                    result = gnssDemodulator.processSamples(msg.msg.buffer);
+                  } else {
+                    result = null;
+                  }
+
                   if (result) {
                     // Auto-update notch filter frequency if CW jamming detected
                     if (result.jamming.isJammed && result.jamming.jammingType === 'CW_TONE' && filterReceiverRef) {
@@ -166,6 +394,24 @@ return (
                     };
                     setDecodedItems(prevDecodedItems => {
                       return [gnssMsg, ...prevDecodedItems];
+                    });
+
+                    // Update satellite history for chart
+                    setSatelliteHistory(prevHistory => {
+                      const satCount = result.satellites.length;
+                      const avgCN0 = satCount > 0
+                        ? result.satellites.reduce((sum: number, sat: any) => sum + (sat.cn0 || 0), 0) / satCount
+                        : 0;
+
+                      const newPoint = {
+                        time: Date.now(),
+                        count: satCount,
+                        avgCN0: avgCN0
+                      };
+
+                      // Keep last 60 points (about 1 minute of data)
+                      const updated = [newPoint, ...prevHistory].slice(0, 60);
+                      return updated;
                     });
                   }
                 } else {
@@ -219,9 +465,23 @@ return (
             console.log('[SDRPlay WebSocket] Connected and streaming!');
           } catch (error) {
             console.error('[SDRPlay WebSocket] Failed to connect:', error);
-            const tunerArg = `--tuner ${tunerSelection}`;
-            const biasTeeArg = biasTeeEnabled ? ' --bias-tee' : '';
-            alert(`Failed to connect to WebSocket server at ${websocketUrl}\n\nMake sure the SDRPlay bridge is running:\n./run_sdrplay_bridge.sh --freq ${freqHz} --rate 2.048e6 --gain 40 ${tunerArg}${biasTeeArg}`);
+
+            let errorMessage = `Failed to connect to WebSocket server at ${websocketUrl}\n\n`;
+
+            if (bridgeMode === 'gnss-sdr') {
+              errorMessage += `Make sure the GNSS-SDR bridge is running:\n\n`;
+              errorMessage += `Terminal 1: Start GNSS-SDR Bridge\n`;
+              errorMessage += `./run_gnss_sdr_bridge.sh\n\n`;
+              errorMessage += `This will automatically start GNSS-SDR and listen on port 8766.\n`;
+              errorMessage += `GNSS-SDR processes signals professionally with accurate C/N0 measurements.`;
+            } else {
+              const tunerArg = `--tuner ${tunerSelection}`;
+              const biasTeeArg = biasTeeEnabled ? ' --bias-tee' : '';
+              errorMessage += `Make sure the SDRPlay bridge is running:\n\n`;
+              errorMessage += `./run_sdrplay_bridge.sh --freq ${freqHz} --rate 2.048e6 --gain 40 ${tunerArg}${biasTeeArg}`;
+            }
+
+            alert(errorMessage);
           }
       }}>Listen&Decode</Button>
       <Button disabled={websocketReceiver === null || !websocketReceiver.isConnected()} onClick={async ()=>{
@@ -235,12 +495,16 @@ return (
       </Stack>
 
       <FormControl defaultValue="">
-        <Label>WebSocket URL (SDRPlay Bridge)</Label>
+        <Label>
+          {bridgeMode === 'gnss-sdr'
+            ? 'WebSocket URL (GNSS-SDR Bridge)'
+            : 'WebSocket URL (SDRPlay Bridge)'}
+        </Label>
         <Stack direction="row">
           <TextField
             disabled={websocketReceiver?.isConnected()}
             aria-label="WebSocket URL"
-            placeholder="ws://localhost:8765"
+            placeholder={bridgeMode === 'gnss-sdr' ? 'ws://localhost:8766' : 'ws://localhost:8765'}
             value={websocketUrl}
             onChange={(event) => setWebsocketUrl(event.target.value)}
             sx={{ width: '300px' }}
@@ -250,6 +514,9 @@ return (
         </Stack>
       </FormControl>
 
+      {/* Hide all detailed settings when GNSS-SDR mode is selected */}
+      {bridgeMode === 'sdrplay' && (
+      <>
       <FormControl defaultValue="" >
       <Label>Protocol</Label>
 
@@ -320,7 +587,14 @@ return (
       <Select
         disabled={websocketReceiver?.isConnected()}
         value={tunerSelection}
-        onChange={(event) => setTunerSelection(Number(event.target.value))}
+        onChange={(event) => {
+          const newTuner = Number(event.target.value);
+          setTunerSelection(newTuner);
+          // Auto-disable T-bias if switching to Tuner 1
+          if (newTuner === 1 && biasTeeEnabled) {
+            setBiasTeeEnabled(false);
+          }
+        }}
         sx={{ width: '150px' }}
       >
         <MenuItem value={1}>Tuner 1</MenuItem>
@@ -336,16 +610,23 @@ return (
           id="biasTeeCheckbox"
           disabled={websocketReceiver?.isConnected()}
           checked={biasTeeEnabled}
-          onChange={(e) => setBiasTeeEnabled(e.target.checked)}
+          onChange={(e) => {
+            const newBiasTee = e.target.checked;
+            setBiasTeeEnabled(newBiasTee);
+            // Auto-select Tuner 2 if enabling T-bias
+            if (newBiasTee && tunerSelection !== 2) {
+              setTunerSelection(2);
+            }
+          }}
           style={{ width: '20px', height: '20px', cursor: websocketReceiver?.isConnected() ? 'not-allowed' : 'pointer' }}
         />
         <label htmlFor="biasTeeCheckbox" style={{ cursor: websocketReceiver?.isConnected() ? 'not-allowed' : 'pointer' }}>
           {biasTeeEnabled ? 'ENABLED (for active antenna)' : 'DISABLED'}
         </label>
       </Box>
-      {biasTeeEnabled && tunerSelection !== 2 && (
-        <Typography variant="caption" color="warning.main" sx={{ mt: 0.5 }}>
-          Warning: T-bias only works on Tuner 2
+      {biasTeeEnabled && (
+        <Typography variant="caption" color="success.main" sx={{ mt: 0.5 }}>
+          ✓ T-bias enabled on Tuner 2 (powers active antenna)
         </Typography>
       )}
     </FormControl>
@@ -381,6 +662,8 @@ return (
         </Box>
       )}
     </FormControl>
+    </>
+    )}
   </Box>
   <Box
     justifyContent='center'

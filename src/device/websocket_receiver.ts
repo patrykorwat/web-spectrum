@@ -63,7 +63,12 @@ export class WebSocketReceiver {
         };
 
         this.ws.onmessage = (event) => {
-          this.handleData(event.data);
+          // Check if data is binary (IQ samples) or text (JSON)
+          if (event.data instanceof ArrayBuffer) {
+            this.handleData(event.data);
+          } else if (typeof event.data === 'string') {
+            this.handleJsonMessage(event.data);
+          }
         };
 
         this.ws.onerror = (error) => {
@@ -128,6 +133,31 @@ export class WebSocketReceiver {
     // Data is in RTL-SDR format: interleaved IQ uint8
     // Note: frequency parameter isn't used by GNSS receiver, pass 0
     this.receiver.receiveSamples(0, data);
+  }
+
+  /**
+   * Handle incoming JSON message (GNSS data from parse_gnss_logs.py or progress updates)
+   */
+  private handleJsonMessage(jsonString: string): void {
+    try {
+      const message = JSON.parse(jsonString);
+
+      // Log GNSS data or progress messages
+      if (message.protocol === 'GNSS_GPS_L1' && message.satellites) {
+        console.log(`[WebSocket] ✅ GNSS data received: ${message.satellites.length} satellites`, message);
+        console.log('[WebSocket] Forwarding to receiver.receiveSamples()...');
+        // Forward to receiver as a special JSON message type
+        this.receiver.receiveSamples(0, message);
+        console.log('[WebSocket] ✅ Forwarded to receiver');
+      } else if (message.type === 'progress') {
+        console.log(`[WebSocket] Progress: ${message.phase} - ${message.progress}% - ${message.message}`);
+        // Could forward to UI for progress bar display
+      } else {
+        console.log('[WebSocket] Received unknown message type:', message);
+      }
+    } catch (e) {
+      console.error('[WebSocket] Failed to parse JSON message:', e);
+    }
   }
 
   /**

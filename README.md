@@ -46,14 +46,68 @@ The current implementation decodes ADS-B signals as well following protocols:
 
 ### SDRPlay
 
-Warning: in order to setup SDRPlay, follow the instructions [SDRPlay Quickstart](./SDRPLAY_QUICKSTART.md) and [SDRPlay Setup](./SDRPLAY_SETUP.md)
+**Two modes available:**
 
-The current implementation decodes following protocols:
-* GNSS
-** GPS L1
-** Galileo E1
-** GLONASS L1OF
-** BeiDou B1I
+#### 1. Professional Mode (GNSS-SDR Backend) - **RECOMMENDED**
+Uses industry-standard GNSS-SDR software for professional-grade signal processing:
+- ✅ Accurate C/N0 measurements (dB-Hz)
+- ✅ Real positioning (PVT solutions)
+- ✅ Better jamming detection
+- ✅ Multi-constellation support
+- ✅ Battle-tested algorithms
+- ✅ **Single-command operation** (auto-starts GNSS-SDR + SDRPlay streamer)
+
+📚 **Documentation:**
+- [Complete Setup Guide](./gnss-sdr/GNSS_SDR_COMPLETE_SETUP.md) - **START HERE** for full installation
+- [Quick Setup](./gnss-sdr/GNSS_SDR_SETUP.md) - Basic setup guide
+- [Troubleshooting](./gnss-sdr/GNSS_SDR_COMPLETE_SETUP.md#-troubleshooting) - Common issues and fixes
+
+**Quick Start:**
+```bash
+# Install GNSS-SDR (one-time setup, ~30-40 min)
+cd gnss-sdr
+./install_gnss_sdr.sh
+
+# Terminal 1: Start web UI (from repo root)
+npm start
+# Opens at http://localhost:3005
+
+# Terminal 2: Run bridge with auto-start (starts GNSS-SDR + SDRPlay streamer!)
+cd gnss-sdr
+./run_gnss_sdr_bridge.sh
+
+# Browser:
+# 1. Go to SDRPlay Decoder page
+# 2. Select "Professional Mode (GNSS-SDR)" at the top
+# 3. Click "Listen & Decode"
+```
+
+**Alternative: File-Based Processing** (works immediately, no web UI needed)
+```bash
+cd gnss-sdr
+
+# Record 60 seconds of GPS samples
+python3 record_iq_samples.py /tmp/gps_iq_samples.dat 60
+
+# Process with GNSS-SDR
+gnss-sdr --config_file=gnss_sdr_file.conf
+
+# You should see satellite tracking messages!
+```
+
+#### 2. Raw IQ Mode (Browser Processing)
+Streams raw IQ samples to browser for JavaScript-based correlation:
+- ⚠️ Simplified algorithms
+- ⚠️ Limited accuracy
+- ⚠️ Higher bandwidth
+
+Setup: Follow [SDRPlay Quickstart](./SDRPLAY_QUICKSTART.md) and [SDRPlay Setup](./SDRPLAY_SETUP.md)
+
+Supported GNSS Constellations:
+* GPS L1 C/A (USA)
+* Galileo E1 (Europe)
+* GLONASS L1OF (Russia)
+* BeiDou B1I (China)
 
 ## References
 

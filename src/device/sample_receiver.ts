@@ -83,10 +83,22 @@ export class LoggingReceiver implements SampleReceiver {
     console.log("setSampleRate", sampleRate);
   }
 
-  receiveSamples(frequency: number, data: ArrayBuffer): void {
+  receiveSamples(frequency: number, data: ArrayBuffer | any): void {
+    // Check if data is already a GNSS result object (JSON from parse_gnss_logs)
+    if (isGNSS(this.protocol) && data && typeof data === 'object' && 'satellites' in data && 'protocol' in data) {
+      console.log(`[LoggingReceiver] Received pre-processed GNSS JSON data with ${data.satellites.length} satellites`);
+      // Pass the JSON object directly to the callback
+      this.onMsg({
+        time: new Date(),
+        msg: data,  // Pass the JSON object as-is
+        decoded: `${data.satellites.length} sat(s) from GNSS-SDR`
+      });
+      return;
+    }
+
+    // Otherwise, treat as binary ArrayBuffer
     const samples = new Uint8Array(data);
     console.log("got samples", samples.length);
-
 
     if (this.protocol === Protocol.ADSB) {
       // ADS-B demodulation

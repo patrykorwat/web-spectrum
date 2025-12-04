@@ -121,7 +121,7 @@ const mainListItems = [
 ];
 
 function App() {
-  const [menuSelection, setMenuSelection] = useState(1);
+  const [menuSelection, setMenuSelection] = useState(6); // Default to SDRPlay GNSS-SDR Decoder
 
 return (
   <ThemeProvider theme={darkTheme}>
