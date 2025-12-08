@@ -18,9 +18,22 @@ last_update_time = None
 
 async def send_satellite_data(websocket_url='ws://localhost:8766'):
     """Connect to bridge WebSocket and send satellite updates"""
+    last_sat_count = 0
+    last_send_time = 0
+
     while True:
         try:
-            if tracked_satellites:
+            current_time = datetime.now().timestamp()
+            sat_count = len(tracked_satellites)
+
+            # Send if: satellites changed OR 30 seconds passed OR we have satellites
+            should_send = (
+                sat_count != last_sat_count or  # Satellite count changed
+                (current_time - last_send_time) >= 30 or  # 30 seconds elapsed
+                (sat_count > 0 and (current_time - last_send_time) >= 1)  # Have satellites, send every 1s
+            )
+
+            if should_send and tracked_satellites:
                 # Build message in GNSS protocol format
                 satellites_list = []
                 for prn, info in tracked_satellites.items():
@@ -57,7 +70,10 @@ async def send_satellite_data(websocket_url='ws://localhost:8766'):
                     await websocket.send(json.dumps(message))
                     print(f"📡 Sent update: {len(satellites_list)} satellites")
 
-            await asyncio.sleep(1)  # Send updates every second
+                last_send_time = current_time
+                last_sat_count = sat_count
+
+            await asyncio.sleep(1)  # Check every second
 
         except Exception as e:
             print(f"⚠️  WebSocket error: {e}")

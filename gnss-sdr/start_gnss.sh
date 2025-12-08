@@ -25,12 +25,8 @@ export PYTHONPATH="/opt/homebrew/lib/python3.14/site-packages:$PYTHONPATH"
 # Cleanup function
 cleanup() {
     echo ""
-    echo "🛑 Shutting down..."
-    # Kill bridge
-    if [ ! -z "$BRIDGE_PID" ]; then
-        kill $BRIDGE_PID 2>/dev/null || true
-        wait $BRIDGE_PID 2>/dev/null || true
-    fi
+    echo "🛑 Shutting down data collection..."
+    # NOTE: Bridge cleanup is handled by start_all.sh
     # Kill GNSS-SDR
     pkill -9 -f "gnss-sdr" 2>/dev/null || true
     # Kill log parser
@@ -54,46 +50,17 @@ sleep 2
 echo "✓ Cleanup complete"
 echo ""
 
-# Check SDRPlay
-echo "🔍 Checking SDRPlay connection..."
-if ! python3 -c "import SoapySDR; devices = SoapySDR.Device.enumerate('driver=sdrplay'); exit(0 if devices else 1)" 2>/dev/null; then
-    echo "❌ ERROR: SDRPlay not found!"
-    echo "   Please check:"
-    echo "   • SDRPlay is connected via USB"
-    echo "   • SDRPlay API is installed"
-    exit 1
-fi
-echo "✓ SDRPlay found"
+# Check SDRPlay - DISABLED because SoapySDR enumeration hangs
+# The recording script will fail if device is not available anyway
+echo "⚠️  Note: SDRPlay device check disabled (SoapySDR hangs)"
+echo "   If recording fails, check that SDRPlay is connected via USB"
 echo ""
 
 echo "⚠️  IMPORTANT: Make sure your GPS antenna has a CLEAR SKY VIEW!"
 echo ""
 
-# Start WebSocket bridge in background
-echo "========================================================================"
-echo "Step 1: Starting WebSocket Bridge"
-echo "========================================================================"
-echo ""
-echo "🌐 Starting bridge on ws://localhost:8766..."
-
-python3 gnss_sdr_bridge.py --config gnss_sdr_file.conf --no-auto-start 2>&1 | while IFS= read -r line; do
-    echo "[BRIDGE] $line"
-done &
-
-BRIDGE_PID=$!
-sleep 3
-
-# Check if bridge started successfully
-if ! kill -0 $BRIDGE_PID 2>/dev/null; then
-    echo "❌ ERROR: Bridge failed to start"
-    exit 1
-fi
-
-echo "✓ Bridge started (PID: $BRIDGE_PID)"
-echo "✓ WebSocket ready on ws://localhost:8766"
-echo ""
-echo "👉 You can now connect your web UI to ws://localhost:8766"
-echo ""
+# NOTE: WebSocket bridge is managed by start_all.sh
+# This script only handles the recording and processing loop
 
 # Start continuous recording and processing loop
 echo "========================================================================"
@@ -110,50 +77,69 @@ while true; do
     echo "========================================================================"
     echo ""
 
-    # Check if bridge is still running
-    if ! kill -0 $BRIDGE_PID 2>/dev/null; then
-        echo "❌ ERROR: Bridge died! Restarting..."
-        python3 gnss_sdr_bridge.py --config gnss_sdr_file.conf --no-auto-start 2>&1 | while IFS= read -r line; do
-            echo "[BRIDGE] $line"
-        done &
-        BRIDGE_PID=$!
-        sleep 3
-    fi
+    # NOTE: Bridge monitoring is handled by start_all.sh
 
     # Step 1: Record
-    echo "📡 Recording 5 minutes (longer for PVT fix) of GPS samples..."
+    echo "📡 Recording 15 minutes (for stable tracking) of GPS samples..."
     echo "   Output: /tmp/gps_iq_samples.dat"
     echo ""
 
     rm -f /tmp/gps_iq_samples.dat
 
     # Start recording in background
-    python3 record_iq_samples.py /tmp/gps_iq_samples.dat 300 &
+    python3 record_iq_samples.py /tmp/gps_iq_samples.dat 900 &
     RECORD_PID=$!
 
-    # Send progress updates while recording
-    RECORD_DURATION=300
-    for ((i=0; i<=RECORD_DURATION; i+=10)); do
-        if ! kill -0 $RECORD_PID 2>/dev/null; then
-            # Recording finished or failed
-            break
-        fi
+    # Start progress reporter in background (independent of recording)
+    (
+        RECORD_DURATION=900
+        START_TIME=$(date +%s)
+        while true; do
+            ELAPSED=$(($(date +%s) - START_TIME))
 
-        PROGRESS=$((i * 100 / RECORD_DURATION))
-        REMAINING=$((RECORD_DURATION - i))
-        python3 send_progress.py "recording" "$PROGRESS" "$i" "$RECORD_DURATION" "Recording GPS samples: ${REMAINING}s remaining" 2>/dev/null || true
+            # Stop if elapsed time exceeds duration
+            if [ $ELAPSED -ge $RECORD_DURATION ]; then
+                break
+            fi
 
-        # Show progress in terminal every 30 seconds
-        if [ $((i % 30)) -eq 0 ] && [ $i -gt 0 ]; then
-            echo "   [${i}s] Recording... ($REMAINING seconds remaining)"
-        fi
+            # Check if recording process is still alive
+            if ! kill -0 $RECORD_PID 2>/dev/null; then
+                break
+            fi
 
-        sleep 10
+            PROGRESS=$((ELAPSED * 100 / RECORD_DURATION))
+            REMAINING=$((RECORD_DURATION - ELAPSED))
+            python3 send_progress.py "recording" "$PROGRESS" "$ELAPSED" "$RECORD_DURATION" "Recording GPS samples: ${REMAINING}s remaining" 2>/dev/null || true
+
+            # Show progress in terminal every 30 seconds
+            if [ $((ELAPSED % 30)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
+                echo "   [${ELAPSED}s] Recording... ($REMAINING seconds remaining)"
+            fi
+
+            sleep 10
+        done
+    ) &
+    PROGRESS_PID=$!
+
+    # Wait for recording to finish (with timeout)
+    WAIT_COUNT=0
+    while kill -0 $RECORD_PID 2>/dev/null && [ $WAIT_COUNT -lt 920 ]; do
+        sleep 1
+        WAIT_COUNT=$((WAIT_COUNT + 1))
     done
 
-    # Wait for recording to finish
-    wait $RECORD_PID
-    RECORD_EXIT=$?
+    # Kill progress reporter
+    kill $PROGRESS_PID 2>/dev/null || true
+
+    # Check if recording finished normally or timed out
+    if kill -0 $RECORD_PID 2>/dev/null; then
+        echo "⚠️  Recording timed out, killing process..."
+        kill -9 $RECORD_PID 2>/dev/null
+        RECORD_EXIT=1
+    else
+        wait $RECORD_PID 2>/dev/null
+        RECORD_EXIT=$?
+    fi
 
     if [ $RECORD_EXIT -ne 0 ]; then
         echo ""

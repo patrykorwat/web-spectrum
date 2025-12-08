@@ -24,6 +24,16 @@ import { SampleReceiver } from './sample_receiver';
  * Receives IQ samples from a WebSocket server (e.g., SDRPlay bridge)
  * Compatible with RTL-SDR sample format (interleaved IQ uint8)
  */
+export interface ProgressMessage {
+  type: 'progress';
+  phase: string;
+  progress: number;
+  elapsed: number;
+  total: number;
+  message: string;
+  timestamp: number;
+}
+
 export class WebSocketReceiver {
   private ws: WebSocket | null = null;
   private receiver: SampleReceiver;
@@ -31,15 +41,17 @@ export class WebSocketReceiver {
   private connected: boolean = false;
   private reconnectTimer: number | null = null;
   private reconnectDelay: number = 2000; // 2 seconds
+  private progressCallback: ((progress: ProgressMessage) => void) | null = null;
 
   // Statistics
   private bytesReceived: number = 0;
   private lastStatsTime: number = Date.now();
   private connectionTime: number = 0;
 
-  constructor(url: string, receiver: SampleReceiver) {
+  constructor(url: string, receiver: SampleReceiver, progressCallback?: (progress: ProgressMessage) => void) {
     this.url = url;
     this.receiver = receiver;
+    this.progressCallback = progressCallback || null;
   }
 
   /**
@@ -151,7 +163,10 @@ export class WebSocketReceiver {
         console.log('[WebSocket] ✅ Forwarded to receiver');
       } else if (message.type === 'progress') {
         console.log(`[WebSocket] Progress: ${message.phase} - ${message.progress}% - ${message.message}`);
-        // Could forward to UI for progress bar display
+        // Forward progress to UI callback
+        if (this.progressCallback) {
+          this.progressCallback(message as ProgressMessage);
+        }
       } else {
         console.log('[WebSocket] Received unknown message type:', message);
       }

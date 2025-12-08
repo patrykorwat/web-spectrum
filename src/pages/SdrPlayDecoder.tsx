@@ -98,6 +98,11 @@ function SdrPlayDecoder() {
   const [progressTotal, setProgressTotal] = useState<number>(0);
   const [progressMessage, setProgressMessage] = useState<string>('');
 
+  // GNSS collection control
+  const [gnssCollectionRunning, setGnssCollectionRunning] = useState<boolean>(false);
+  const [gnssCollectionLoading, setGnssCollectionLoading] = useState<boolean>(false);
+  const [gnssCollectionError, setGnssCollectionError] = useState<string | null>(null);
+
   const pointsBatch = 10000;
 
   const xPoints: Array<number> = [];
@@ -116,6 +121,28 @@ function SdrPlayDecoder() {
     }
   }, [bridgeMode, websocketReceiver]);
 
+  // Poll GNSS collection status every 2 seconds
+  useEffect(() => {
+    if (bridgeMode !== 'gnss-sdr') return;
+
+    const pollStatus = async () => {
+      try {
+        const response = await fetch('http://localhost:8767/status');
+        const data = await response.json();
+        setGnssCollectionRunning(data.running);
+        setGnssCollectionError(null);
+      } catch (error) {
+        // Control API not running - that's okay
+        setGnssCollectionRunning(false);
+      }
+    };
+
+    pollStatus(); // Check immediately
+    const interval = setInterval(pollStatus, 2000); // Then every 2 seconds
+
+    return () => clearInterval(interval);
+  }, [bridgeMode]);
+
   const download = () => {
     let lines = 'decoded,time,msg'
     for(let i=0; i<decodedItems.length; i++) {
@@ -123,6 +150,67 @@ function SdrPlayDecoder() {
       lines += '\n';
     }
     downloadFile(`spectrum-${new Date().toISOString()}.csv`, 'data:text/csv;charset=UTF-8,' + encodeURIComponent(lines));
+  };
+
+  // GNSS Collection Control Functions
+  const handleStartGnssCollection = async () => {
+    setGnssCollectionLoading(true);
+    setGnssCollectionError(null);
+    try {
+      const response = await fetch('http://localhost:8767/start', { method: 'POST' });
+      const data = await response.json();
+      if (response.ok) {
+        setGnssCollectionRunning(true);
+        console.log('[GNSS Control] Started collection:', data);
+      } else {
+        setGnssCollectionError(data.error || 'Failed to start collection');
+      }
+    } catch (error) {
+      setGnssCollectionError('Control API not available. Run control_api.py first.');
+      console.error('[GNSS Control] Error starting collection:', error);
+    } finally {
+      setGnssCollectionLoading(false);
+    }
+  };
+
+  const handleStopGnssCollection = async () => {
+    setGnssCollectionLoading(true);
+    setGnssCollectionError(null);
+    try {
+      const response = await fetch('http://localhost:8767/stop', { method: 'POST' });
+      const data = await response.json();
+      if (response.ok) {
+        setGnssCollectionRunning(false);
+        console.log('[GNSS Control] Stopped collection:', data);
+      } else {
+        setGnssCollectionError(data.error || 'Failed to stop collection');
+      }
+    } catch (error) {
+      setGnssCollectionError('Control API not available');
+      console.error('[GNSS Control] Error stopping collection:', error);
+    } finally {
+      setGnssCollectionLoading(false);
+    }
+  };
+
+  const handleRestartGnssCollection = async () => {
+    setGnssCollectionLoading(true);
+    setGnssCollectionError(null);
+    try {
+      const response = await fetch('http://localhost:8767/restart', { method: 'POST' });
+      const data = await response.json();
+      if (response.ok) {
+        setGnssCollectionRunning(true);
+        console.log('[GNSS Control] Restarted collection:', data);
+      } else {
+        setGnssCollectionError(data.error || 'Failed to restart collection');
+      }
+    } catch (error) {
+      setGnssCollectionError('Control API not available. Run control_api.py first.');
+      console.error('[GNSS Control] Error restarting collection:', error);
+    } finally {
+      setGnssCollectionLoading(false);
+    }
   };
 
 return (
@@ -160,169 +248,16 @@ return (
       </MuiFormControl>
     </Box>
 
-    {/* Setup Instructions - Only show for GNSS-SDR mode when not connected */}
-    {bridgeMode === 'gnss-sdr' && !websocketReceiver?.isConnected() && (
-      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(33, 150, 243, 0.08)', borderRadius: '8px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
-        <Typography variant="h6" sx={{ marginBottom: '15px', color: 'info.main' }}>
-          📡 GNSS-SDR Setup Required
-        </Typography>
-        <Typography variant="body2" sx={{ marginBottom: '10px' }}>
-          Before clicking "Listen&Decode", run this ONE command in your terminal:
-        </Typography>
-        <Box sx={{
-          backgroundColor: 'rgba(0, 0, 0, 0.4)',
-          padding: '12px',
-          borderRadius: '4px',
-          fontFamily: 'monospace',
-          fontSize: '0.9em',
-          marginBottom: '10px'
-        }}>
-          cd gnss-sdr<br />
-          ./start_gnss.sh
-        </Box>
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', marginBottom: '8px' }}>
-          This single script does EVERYTHING:
-        </Typography>
-        <Typography variant="caption" color="text.secondary" component="div" sx={{ paddingLeft: '15px' }}>
-          • Starts WebSocket bridge on port 8766<br />
-          • Records 5 min of GPS samples from SDRPlay<br />
-          • Processes with GNSS-SDR (satellites appear here!)<br />
-          • Repeats continuously for real-time tracking<br />
-          • Stop with Ctrl+C
-        </Typography>
-        <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', color: 'info.main', fontStyle: 'italic' }}>
-          ℹ️ First cycle takes 5-10 minutes (recording + ephemeris decoding). Be patient!
-        </Typography>
-
-        {/* Processing Timeline */}
-        <Box sx={{ marginTop: '15px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.3)', borderRadius: '4px' }}>
-          <Typography variant="caption" sx={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>
-            📊 Processing Timeline (First Cycle):
-          </Typography>
-          <Box sx={{ paddingLeft: '10px', fontSize: '0.85em' }}>
-            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
-              <span style={{ color: '#4CAF50' }}>⏱️ Min 0-5:</span> 📡 Recording GPS samples (5 minutes)
-            </Typography>
-            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
-              <span style={{ color: '#2196F3' }}>⏱️ Min 5-6:</span> 🛰️  Satellite acquisition (tracking starts)
-            </Typography>
-            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
-              <span style={{ color: '#FF9800' }}>⏱️ Min 6-8:</span> 📖 Ephemeris decoding (navigation data)
-            </Typography>
-            <Typography variant="caption" component="div" sx={{ color: '#4CAF50', fontWeight: 'bold' }}>
-              <span>⏱️ Min 8-10:</span> 📍 First position fix! → ✅ DATA APPEARS HERE!
-            </Typography>
-          </Box>
-        </Box>
-
-        <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', color: 'warning.main' }}>
-          ⚠️ Make sure your GPS antenna has a clear sky view!
-        </Typography>
-      </Box>
-    )}
-
-    {/* Satellite Acquisition Info - Only show for GNSS-SDR mode when connected */}
-    {bridgeMode === 'gnss-sdr' && websocketReceiver?.isConnected() && (
-      <Box sx={{ marginBottom: '20px', padding: '15px', backgroundColor: 'rgba(0, 255, 0, 0.05)', borderRadius: '8px', border: '1px solid rgba(0, 255, 0, 0.2)' }}>
-        <Typography variant="h6" sx={{ marginBottom: '10px', color: 'success.main' }}>
-          🛰️ Satellite Acquisition Status
-        </Typography>
-        <Box>
-          <Typography variant="body1" sx={{ marginBottom: '5px' }}>
-            {decodedItems.length > 0 && decodedItems[0].msg?.satellites ? (
-              <>
-                <strong>Satellites Tracking:</strong> {decodedItems[0].msg.satellites.length} satellite(s)
-                {decodedItems[0].msg.satellites.length > 0 && (
-                  <Box sx={{ marginTop: '10px', fontSize: '0.9em' }}>
-                    {decodedItems[0].msg.satellites.slice(0, 8).map((sat: any, idx: number) => (
-                      <Box key={idx} sx={{ marginBottom: '5px', paddingLeft: '20px' }}>
-                        • PRN {sat.prn}: C/N0 = {sat.cn0?.toFixed(1) || 'N/A'} dB-Hz,
-                        Doppler = {sat.dopplerHz?.toFixed(0) || 'N/A'} Hz,
-                        State = {sat.state || 'UNKNOWN'}
-                      </Box>
-                    ))}
-                    {decodedItems[0].msg.satellites.length > 8 && (
-                      <Box sx={{ paddingLeft: '20px', fontStyle: 'italic', color: 'text.secondary' }}>
-                        ... and {decodedItems[0].msg.satellites.length - 8} more
-                      </Box>
-                    )}
-                  </Box>
-                )}
-              </>
-            ) : (
-              <>
-                <strong>Status:</strong> Acquiring satellites... (this may take 30-60 seconds)
-                <br />
-                <Typography variant="caption" color="text.secondary">
-                  GNSS-SDR is processing signals. Satellite data will appear once acquisition completes.
-                </Typography>
-              </>
-            )}
-          </Typography>
-          {decodedItems.length > 0 && decodedItems[0].msg?.jamming && (
-            <Typography variant="body2" sx={{ marginTop: '10px', color: decodedItems[0].msg.jamming.isJammed ? 'error.main' : 'success.main' }}>
-              <strong>Jamming:</strong> {decodedItems[0].msg.jamming.isJammed ?
-                `⚠️ DETECTED (${decodedItems[0].msg.jamming.jammingType})` :
-                '✓ None detected'}
-            </Typography>
-          )}
-        </Box>
-
-        {/* Satellite Tracking History Chart */}
-        {satelliteHistory.length > 1 && (
-          <Box sx={{ marginTop: '15px' }}>
-            <Typography variant="h6" sx={{ marginBottom: '10px', fontSize: '0.95em' }}>
-              📈 Satellite Tracking History
-            </Typography>
-            <LineChart
-              width={900}
-              height={200}
-              series={[
-                {
-                  data: satelliteHistory.slice().reverse().map(p => p.count),
-                  label: 'Satellites',
-                  color: '#4CAF50',
-                  showMark: false
-                },
-                {
-                  data: satelliteHistory.slice().reverse().map(p => p.avgCN0 / 5), // Scale down to fit
-                  label: 'Avg C/N0 (/5)',
-                  color: '#2196F3',
-                  showMark: false
-                }
-              ]}
-              xAxis={[{
-                data: satelliteHistory.slice().reverse().map((_, i) => i),
-                label: 'Time (recent →)'
-              }]}
-              yAxis={[{
-                label: 'Count / C/N0 (scaled)'
-              }]}
-              slotProps={{
-                legend: {
-                  direction: 'row',
-                  position: { vertical: 'top', horizontal: 'middle' },
-                  padding: 0
-                }
-              }}
-            />
-            <Typography variant="caption" sx={{ display: 'block', marginTop: '5px', color: 'text.secondary', textAlign: 'center' }}>
-              Shows last {satelliteHistory.length} updates (~{Math.round(satelliteHistory.length / 60)} min of data)
-            </Typography>
-          </Box>
-        )}
-      </Box>
-    )}
-
-    <Box display="flex"
-      flexWrap="wrap"
-      justifyContent="center"
+    {/* Listen & Decode Button - Show first so user connects before starting collection */}
+    <Box
+      display="flex"
+      flexDirection="column"
       alignItems="flex-start"
       gap={3}
       minHeight="10vh"
       sx={{ marginBottom: '30px' }}>
 
-      <Stack spacing={2}>
+      <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
         <ButtonGroup variant="contained" aria-label="Basic button group">
         <Button disabled={websocketReceiver?.isConnected()} onClick={ async () => {
           const freqHz = frequency*frequencyMag;
@@ -457,8 +392,14 @@ return (
                 gnssDemodulator.setProtocol(protocol);
               }
 
-          // Create and connect WebSocket receiver
-          const wsReceiver = new WebSocketReceiver(websocketUrl, sampleReceiver);
+          // Create and connect WebSocket receiver with progress callback
+          const wsReceiver = new WebSocketReceiver(websocketUrl, sampleReceiver, (progress) => {
+            setProgressPhase(progress.phase);
+            setProgressPercent(progress.progress);
+            setProgressElapsed(progress.elapsed);
+            setProgressTotal(progress.total);
+            setProgressMessage(progress.message);
+          });
           try {
             await wsReceiver.connect();
             setWebsocketReceiver(wsReceiver);
@@ -491,30 +432,305 @@ return (
         }
       }}>Disconnect</Button>
         </ButtonGroup>
-        <Button onClick={download}>Download spectrum</Button>
-      </Stack>
 
-      <FormControl defaultValue="">
-        <Label>
-          {bridgeMode === 'gnss-sdr'
-            ? 'WebSocket URL (GNSS-SDR Bridge)'
-            : 'WebSocket URL (SDRPlay Bridge)'}
-        </Label>
-        <Stack direction="row">
-          <TextField
-            disabled={websocketReceiver?.isConnected()}
-            aria-label="WebSocket URL"
-            placeholder={bridgeMode === 'gnss-sdr' ? 'ws://localhost:8766' : 'ws://localhost:8765'}
-            value={websocketUrl}
-            onChange={(event) => setWebsocketUrl(event.target.value)}
-            sx={{ width: '300px' }}
-            size="small"
-            variant="outlined"
-          />
-        </Stack>
-      </FormControl>
+        <TextField
+          disabled={websocketReceiver?.isConnected()}
+          label={bridgeMode === 'gnss-sdr' ? 'WebSocket URL (GNSS-SDR Bridge)' : 'WebSocket URL (SDRPlay Bridge)'}
+          aria-label="WebSocket URL"
+          placeholder={bridgeMode === 'gnss-sdr' ? 'ws://localhost:8766' : 'ws://localhost:8765'}
+          value={websocketUrl}
+          onChange={(event) => setWebsocketUrl(event.target.value)}
+          size="small"
+          sx={{ width: '320px' }}
+        />
 
-      {/* Hide all detailed settings when GNSS-SDR mode is selected */}
+        <Button onClick={download} variant="outlined">Download spectrum</Button>
+      </Box>
+    </Box>
+
+    {/* Collection Control Buttons - ALWAYS visible in GNSS-SDR mode */}
+    {bridgeMode === 'gnss-sdr' && (
+      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(76, 175, 80, 0.08)', borderRadius: '8px', border: '1px solid rgba(76, 175, 80, 0.3)' }}>
+        <Typography variant="h6" sx={{ marginBottom: '15px', color: 'success.main' }}>
+          🎛️ Data Collection Control
+        </Typography>
+
+        <Box sx={{ marginBottom: '10px', display: 'flex', gap: 2, alignItems: 'center' }}>
+          <ButtonGroup variant="contained" size="medium">
+            <Button
+              disabled={gnssCollectionRunning || gnssCollectionLoading}
+              onClick={handleStartGnssCollection}
+              color="success"
+            >
+              {gnssCollectionLoading ? 'Starting...' : 'Start Collection'}
+            </Button>
+            <Button
+              disabled={!gnssCollectionRunning || gnssCollectionLoading}
+              onClick={handleStopGnssCollection}
+              color="error"
+            >
+              {gnssCollectionLoading ? 'Stopping...' : 'Stop Collection'}
+            </Button>
+            <Button
+              disabled={gnssCollectionLoading}
+              onClick={handleRestartGnssCollection}
+              color="warning"
+            >
+              {gnssCollectionLoading ? 'Restarting...' : 'Restart Collection'}
+            </Button>
+          </ButtonGroup>
+
+          <Typography variant="body1" sx={{ fontWeight: 'bold', color: gnssCollectionRunning ? 'success.main' : 'error.main' }}>
+            {gnssCollectionRunning ? '🟢 RUNNING' : '🔴 STOPPED'}
+          </Typography>
+        </Box>
+
+        {gnssCollectionError && (
+          <Typography variant="body2" sx={{ marginTop: '10px', color: 'error.main', padding: '8px', backgroundColor: 'rgba(255, 0, 0, 0.1)', borderRadius: '4px' }}>
+            ⚠️ Backend not available: {gnssCollectionError}
+          </Typography>
+        )}
+      </Box>
+    )}
+
+    {/* Progress Status - Show when collection is running */}
+    {bridgeMode === 'gnss-sdr' && gnssCollectionRunning && websocketReceiver?.isConnected() && (
+      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(33, 150, 243, 0.08)', borderRadius: '8px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
+        {progressPhase ? (
+          <>
+            <Typography variant="h6" sx={{ marginBottom: '10px', color: 'info.main' }}>
+              📊 Current Status: {progressPhase === 'recording' ? '📡 Recording' : progressPhase === 'processing' ? '🛰️ Processing' : '⏳ ' + progressPhase}
+            </Typography>
+
+            <Box sx={{ marginBottom: '10px' }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                  {progressMessage}
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                  {progressPercent}%
+                </Typography>
+              </Box>
+              <LinearProgress
+                variant="determinate"
+                value={progressPercent}
+                sx={{ height: '8px', borderRadius: '4px' }}
+              />
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 3, marginTop: '10px' }}>
+              <Typography variant="caption">
+                ⏱️ Elapsed: {Math.floor(progressElapsed / 60)}:{String(progressElapsed % 60).padStart(2, '0')}
+              </Typography>
+              {progressTotal > 0 && (
+                <>
+                  <Typography variant="caption">
+                    ⏳ Total: {Math.floor(progressTotal / 60)}:{String(progressTotal % 60).padStart(2, '0')}
+                  </Typography>
+                  <Typography variant="caption">
+                    🕐 Remaining: {Math.floor((progressTotal - progressElapsed) / 60)}:{String((progressTotal - progressElapsed) % 60).padStart(2, '0')}
+                  </Typography>
+                </>
+              )}
+            </Box>
+          </>
+        ) : (
+          <>
+            <Typography variant="h6" sx={{ marginBottom: '10px', color: 'info.main' }}>
+              ⏳ Collection Running
+            </Typography>
+            <Typography variant="body2" sx={{ marginBottom: '10px' }}>
+              Waiting for progress update from data collection process...
+            </Typography>
+            <LinearProgress sx={{ height: '8px', borderRadius: '4px' }} />
+            <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', fontStyle: 'italic' }}>
+              Progress updates arrive every ~10 seconds
+            </Typography>
+          </>
+        )}
+      </Box>
+    )}
+
+    {/* Setup Instructions - Only show for GNSS-SDR mode when not connected */}
+    {bridgeMode === 'gnss-sdr' && !websocketReceiver?.isConnected() && (
+      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(33, 150, 243, 0.08)', borderRadius: '8px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
+        <Typography variant="h6" sx={{ marginBottom: '15px', color: 'info.main' }}>
+          📡 Setup Instructions
+        </Typography>
+
+        <Typography variant="body2" sx={{ display: 'block', marginBottom: '15px', padding: '15px', backgroundColor: 'rgba(76, 175, 80, 0.1)', borderRadius: '4px', border: '1px solid rgba(76, 175, 80, 0.3)' }}>
+          <strong>🚀 Setup (one time):</strong><br />
+          <Box component="span" sx={{ display: 'block', fontFamily: 'monospace', backgroundColor: 'rgba(0,0,0,0.3)', padding: '10px', borderRadius: '4px', marginTop: '10px', fontSize: '1.1em' }}>
+            ./start_all.sh
+          </Box>
+          <span style={{ fontSize: '0.95em', display: 'block', marginTop: '10px' }}>
+            This starts the backend services (Control API + GNSS Bridge).
+          </span>
+        </Typography>
+
+        <Typography variant="body2" sx={{ display: 'block', marginBottom: '15px', padding: '15px', backgroundColor: 'rgba(33, 150, 243, 0.1)', borderRadius: '4px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
+          <strong>📡 Usage (every time):</strong><br />
+          <Box component="ol" sx={{ marginTop: '10px', paddingLeft: '20px', '& li': { marginBottom: '8px' } }}>
+            <li><strong>First:</strong> Click <strong>"Listen&Decode"</strong> (above) to connect to the bridge</li>
+            <li><strong>Then:</strong> Click <strong>"Start Collection"</strong> (below) to begin GPS recording</li>
+            <li>Wait ~8-10 minutes for first satellite data to appear</li>
+            <li>Use <strong>"Stop"</strong> or <strong>"Restart Collection"</strong> as needed</li>
+          </Box>
+        </Typography>
+        <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', color: 'info.main', fontStyle: 'italic' }}>
+          ℹ️ First cycle takes 5-10 minutes (recording + ephemeris decoding). Be patient!
+        </Typography>
+
+        {/* Processing Timeline */}
+        <Box sx={{ marginTop: '15px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.3)', borderRadius: '4px' }}>
+          <Typography variant="caption" sx={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>
+            📊 Processing Timeline (First Cycle):
+          </Typography>
+          <Box sx={{ paddingLeft: '10px', fontSize: '0.85em' }}>
+            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
+              <span style={{ color: '#4CAF50' }}>⏱️ Min 0-5:</span> 📡 Recording GPS samples (5 minutes)
+            </Typography>
+            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
+              <span style={{ color: '#2196F3' }}>⏱️ Min 5-6:</span> 🛰️  Satellite acquisition (tracking starts)
+            </Typography>
+            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
+              <span style={{ color: '#FF9800' }}>⏱️ Min 6-8:</span> 📖 Ephemeris decoding (navigation data)
+            </Typography>
+            <Typography variant="caption" component="div" sx={{ color: '#4CAF50', fontWeight: 'bold' }}>
+              <span>⏱️ Min 8-10:</span> 📍 First position fix! → ✅ DATA APPEARS HERE!
+            </Typography>
+          </Box>
+        </Box>
+
+        <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', color: 'warning.main' }}>
+          ⚠️ Make sure your GPS antenna has a clear sky view!
+        </Typography>
+      </Box>
+    )}
+
+    {/* Satellite Acquisition Info - Only show for GNSS-SDR mode when connected */}
+    {bridgeMode === 'gnss-sdr' && websocketReceiver?.isConnected() && (
+      <Box sx={{ marginBottom: '20px', padding: '15px', backgroundColor: 'rgba(0, 255, 0, 0.05)', borderRadius: '8px', border: '1px solid rgba(0, 255, 0, 0.2)' }}>
+        {/* Device Status Alert */}
+        {decodedItems.length > 0 && decodedItems[0].msg?.deviceStatus && !decodedItems[0].msg.deviceStatus.sdrplayConnected && (
+          <Box sx={{ marginBottom: '15px', padding: '15px', backgroundColor: 'rgba(255, 0, 0, 0.15)', borderRadius: '8px', border: '2px solid #f44336' }}>
+            <Typography variant="h6" sx={{ color: 'error.main', marginBottom: '10px', fontWeight: 'bold' }}>
+              ⚠️ SDRPlay Device Disconnected!
+            </Typography>
+            <Typography variant="body2" sx={{ color: 'error.main', marginBottom: '8px' }}>
+              {decodedItems[0].msg.deviceStatus.deviceError}
+            </Typography>
+            <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+              Possible solutions:
+              <Box component="ul" sx={{ marginTop: '5px', paddingLeft: '20px' }}>
+                <li>Check USB cable is securely connected</li>
+                <li>Try a different USB port (avoid USB hubs)</li>
+                <li>Unplug and replug the SDRPlay device</li>
+                <li>Click "Restart Collection" button above after reconnecting</li>
+              </Box>
+            </Typography>
+          </Box>
+        )}
+
+        <Typography variant="h6" sx={{ marginBottom: '10px', color: 'success.main' }}>
+          🛰️ Satellite Acquisition Status
+        </Typography>
+        <Box>
+          <Typography variant="body1" sx={{ marginBottom: '5px' }}>
+            {decodedItems.length > 0 && decodedItems[0].msg?.satellites ? (
+              <>
+                <strong>Satellites Tracking:</strong> {decodedItems[0].msg.satellites.length} satellite(s)
+                {decodedItems[0].msg.satellites.length > 0 && (
+                  <Box sx={{ marginTop: '10px', fontSize: '0.9em' }}>
+                    {decodedItems[0].msg.satellites.slice(0, 8).map((sat: any, idx: number) => (
+                      <Box key={idx} sx={{ marginBottom: '5px', paddingLeft: '20px' }}>
+                        • PRN {sat.prn}: C/N0 = {sat.cn0?.toFixed(1) || 'N/A'} dB-Hz,
+                        Doppler = {sat.dopplerHz?.toFixed(0) || 'N/A'} Hz,
+                        State = {sat.state || 'UNKNOWN'}
+                      </Box>
+                    ))}
+                    {decodedItems[0].msg.satellites.length > 8 && (
+                      <Box sx={{ paddingLeft: '20px', fontStyle: 'italic', color: 'text.secondary' }}>
+                        ... and {decodedItems[0].msg.satellites.length - 8} more
+                      </Box>
+                    )}
+                  </Box>
+                )}
+              </>
+            ) : (
+              <>
+                <strong>Status:</strong> Acquiring satellites... (this may take 30-60 seconds)
+                <br />
+                <Typography variant="caption" color="text.secondary">
+                  GNSS-SDR is processing signals. Satellite data will appear once acquisition completes.
+                </Typography>
+              </>
+            )}
+          </Typography>
+          {decodedItems.length > 0 && decodedItems[0].msg?.jamming && (
+            <Typography variant="body2" sx={{ marginTop: '10px', color: decodedItems[0].msg.jamming.isJammed ? 'error.main' : 'success.main' }}>
+              <strong>Jamming:</strong> {decodedItems[0].msg.jamming.isJammed ?
+                `⚠️ DETECTED (${decodedItems[0].msg.jamming.jammingType})` :
+                '✓ None detected'}
+            </Typography>
+          )}
+        </Box>
+
+        {/* Satellite Tracking History Chart */}
+        {satelliteHistory.length > 1 && (
+          <Box sx={{ marginTop: '15px' }}>
+            <Typography variant="h6" sx={{ marginBottom: '10px', fontSize: '0.95em' }}>
+              📈 Satellite Tracking History
+            </Typography>
+            <LineChart
+              width={900}
+              height={200}
+              series={[
+                {
+                  data: satelliteHistory.slice().reverse().map(p => p.count),
+                  label: 'Satellites',
+                  color: '#4CAF50',
+                  showMark: false
+                },
+                {
+                  data: satelliteHistory.slice().reverse().map(p => p.avgCN0 / 5), // Scale down to fit
+                  label: 'Avg C/N0 (/5)',
+                  color: '#2196F3',
+                  showMark: false
+                }
+              ]}
+              xAxis={[{
+                data: satelliteHistory.slice().reverse().map((_, i) => i),
+                label: 'Time (recent →)'
+              }]}
+              yAxis={[{
+                label: 'Count / C/N0 (scaled)'
+              }]}
+              slotProps={{
+                legend: {
+                  direction: 'row',
+                  position: { vertical: 'top', horizontal: 'middle' },
+                  padding: 0
+                }
+              }}
+            />
+            <Typography variant="caption" sx={{ display: 'block', marginTop: '5px', color: 'text.secondary', textAlign: 'center' }}>
+              Shows last {satelliteHistory.length} updates (~{Math.round(satelliteHistory.length / 60)} min of data)
+            </Typography>
+          </Box>
+        )}
+      </Box>
+    )}
+
+    {/* Hide all detailed settings when GNSS-SDR mode is selected */}
+    <Box display="flex"
+      flexWrap="wrap"
+      justifyContent="center"
+      alignItems="flex-start"
+      gap={3}
+      minHeight="10vh"
+      sx={{ marginBottom: '30px' }}>
+
       {bridgeMode === 'sdrplay' && (
       <>
       <FormControl defaultValue="" >
