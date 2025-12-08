@@ -369,7 +369,23 @@ class GNSSSDRBridge:
         """Setup UDP socket to receive GNSS-SDR monitor data"""
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.udp_socket.bind(('127.0.0.1', self.gnss_sdr_port))
+        try:
+            self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except AttributeError:
+            pass  # SO_REUSEPORT not available on all platforms
+
+        # Close any existing bindings on this port
+        try:
+            self.udp_socket.bind(('127.0.0.1', self.gnss_sdr_port))
+        except OSError as e:
+            print(f"⚠️  Warning: Could not bind UDP port {self.gnss_sdr_port}: {e}")
+            print(f"   Trying to continue anyway...")
+            # Try binding to any available port as fallback
+            self.udp_socket.bind(('127.0.0.1', 0))
+            actual_port = self.udp_socket.getsockname()[1]
+            print(f"   Using alternative port: {actual_port}")
+            self.gnss_sdr_port = actual_port
+
         self.udp_socket.settimeout(1.0)  # 1 second timeout
         print(f"✓ Listening for GNSS-SDR data on UDP port {self.gnss_sdr_port}")
 

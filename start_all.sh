@@ -40,28 +40,16 @@ cleanup() {
 
 trap cleanup SIGINT SIGTERM
 
-# Check if already running
-if lsof -i :3005 > /dev/null 2>&1; then
-    echo "⚠️  Web UI already running on port 3005"
-    echo "Kill it? (y/n)"
-    read -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        pkill -9 -f "npm start"
-        sleep 2
-    else
-        echo "Aborted."
-        exit 1
-    fi
-fi
-
-# Kill any previous instances
+# Kill ALL previous instances automatically (no questions asked)
 echo "Cleaning up previous instances..."
+pkill -9 -f "npm start" 2>/dev/null
 pkill -9 -f "control_api.py" 2>/dev/null
 pkill -9 -f "gnss_sdr_bridge.py" 2>/dev/null
 pkill -9 -f "gnss-sdr" 2>/dev/null
 pkill -9 -f "start_gnss.sh" 2>/dev/null
-sleep 2
+pkill -9 -f "record_iq_samples.py" 2>/dev/null
+pkill -9 -f "parse_gnss_logs.py" 2>/dev/null
+sleep 3
 echo "✓ Cleanup complete"
 echo ""
 
@@ -70,11 +58,11 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "Starting Control API (port 8767)..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cd "$GNSS_DIR"
-python3 control_api.py > /tmp/control_api.log 2>&1 &
-CONTROL_PID=$!
+python3 -u control_api.py > /tmp/control_api.log 2>&1 &
 sleep 2
 
 if lsof -i :8767 > /dev/null 2>&1; then
+    CONTROL_PID=$(lsof -ti :8767 | head -1)
     echo "✓ Control API started (PID $CONTROL_PID)"
 else
     echo "✗ Failed to start Control API"
@@ -90,11 +78,14 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 cd "$GNSS_DIR"
 export DYLD_LIBRARY_PATH="/usr/local/lib:$DYLD_LIBRARY_PATH"
 export PYTHONPATH="/opt/homebrew/lib/python3.14/site-packages:$PYTHONPATH"
-python3 gnss_sdr_bridge.py --config gnss_sdr_file.conf --no-auto-start > /tmp/gnss_bridge.log 2>&1 &
+echo "DEBUG: Starting bridge with verbose output..."
+python3 -u gnss_sdr_bridge.py --config gnss_sdr_file.conf --no-auto-start > /tmp/gnss_bridge.log 2>&1 &
 BRIDGE_PID=$!
 sleep 2
 
 if lsof -i :8766 > /dev/null 2>&1; then
+    # Get the actual Python process PID (not tee)
+    BRIDGE_PID=$(lsof -ti :8766 | grep -v grep | head -1)
     echo "✓ GNSS Bridge started (PID $BRIDGE_PID)"
 else
     echo "✗ Failed to start GNSS Bridge"
@@ -147,25 +138,30 @@ echo ""
 while true; do
     sleep 10
 
-    # Check if Control API is still running
-    if ! kill -0 $CONTROL_PID 2>/dev/null; then
+    # Check if Control API is still running (check by port, not PID)
+    if ! lsof -i :8767 > /dev/null 2>&1; then
         echo "⚠️  Control API crashed! Restarting..."
         cd "$GNSS_DIR"
-        python3 control_api.py > /tmp/control_api.log 2>&1 &
-        CONTROL_PID=$!
-        echo "✓ Control API restarted (PID $CONTROL_PID)"
+        python3 -u control_api.py > /tmp/control_api.log 2>&1 &
+        sleep 2
+        if lsof -i :8767 > /dev/null 2>&1; then
+            CONTROL_PID=$(lsof -ti :8767 | head -1)
+            echo "✓ Control API restarted (PID $CONTROL_PID)"
+        else
+            echo "✗ Failed to restart Control API"
+        fi
     fi
 
-    # Check if GNSS Bridge is still running
-    if ! kill -0 $BRIDGE_PID 2>/dev/null; then
+    # Check if GNSS Bridge is still running (check by port, not PID)
+    if ! lsof -i :8766 > /dev/null 2>&1; then
         echo "⚠️  GNSS Bridge crashed! Restarting..."
         cd "$GNSS_DIR"
         export DYLD_LIBRARY_PATH="/usr/local/lib:$DYLD_LIBRARY_PATH"
         export PYTHONPATH="/opt/homebrew/lib/python3.14/site-packages:$PYTHONPATH"
-        python3 gnss_sdr_bridge.py --config gnss_sdr_file.conf --no-auto-start > /tmp/gnss_bridge.log 2>&1 &
-        BRIDGE_PID=$!
+        python3 -u gnss_sdr_bridge.py --config gnss_sdr_file.conf --no-auto-start > /tmp/gnss_bridge.log 2>&1 &
         sleep 2
         if lsof -i :8766 > /dev/null 2>&1; then
+            BRIDGE_PID=$(lsof -ti :8766 | head -1)
             echo "✓ GNSS Bridge restarted (PID $BRIDGE_PID)"
         else
             echo "✗ Failed to restart GNSS Bridge"

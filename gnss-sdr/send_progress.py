@@ -20,7 +20,8 @@ async def send_progress(phase, progress_percent=0, elapsed_time=0, total_time=0,
         message: status message
     """
     try:
-        async with websockets.connect('ws://localhost:8766', ping_interval=None, timeout=2) as websocket:
+        # Connect with open_timeout instead of timeout parameter
+        async with websockets.connect('ws://localhost:8766', ping_interval=None, open_timeout=2) as websocket:
             status_message = {
                 'type': 'progress',
                 'phase': phase,
@@ -31,9 +32,11 @@ async def send_progress(phase, progress_percent=0, elapsed_time=0, total_time=0,
                 'timestamp': int(datetime.now().timestamp() * 1000)
             }
             await websocket.send(json.dumps(status_message))
+            # Give time for message to be sent before closing connection
+            await asyncio.sleep(0.1)
     except Exception as e:
-        # Silently fail if bridge not ready
-        pass
+        # Print error for debugging
+        print(f"Error sending progress: {e}", file=sys.stderr)
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:

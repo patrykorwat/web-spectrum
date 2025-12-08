@@ -43,7 +43,7 @@ trap cleanup SIGINT SIGTERM
 echo "🧹 Cleaning up previous processes..."
 pkill -9 -f "python.*sdrplay" 2>/dev/null || true
 pkill -9 -f "gnss-sdr" 2>/dev/null || true
-pkill -9 -f "gnss_sdr_bridge" 2>/dev/null || true
+# NOTE: Do NOT kill gnss_sdr_bridge - it's managed by start_all.sh
 pkill -9 -f "parse_gnss_logs" 2>/dev/null || true
 pkill -9 -f "record_iq" 2>/dev/null || true
 sleep 2
@@ -109,7 +109,8 @@ while true; do
 
             PROGRESS=$((ELAPSED * 100 / RECORD_DURATION))
             REMAINING=$((RECORD_DURATION - ELAPSED))
-            python3 send_progress.py "recording" "$PROGRESS" "$ELAPSED" "$RECORD_DURATION" "Recording GPS samples: ${REMAINING}s remaining" 2>/dev/null || true
+            SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            python3 "$SCRIPT_DIR/send_progress.py" "recording" "$PROGRESS" "$ELAPSED" "$RECORD_DURATION" "Recording GPS samples: ${REMAINING}s remaining" || true
 
             # Show progress in terminal every 30 seconds
             if [ $((ELAPSED % 30)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
@@ -144,7 +145,8 @@ while true; do
     if [ $RECORD_EXIT -ne 0 ]; then
         echo ""
         echo "⚠️  Recording failed! Retrying in 10 seconds..."
-        python3 send_progress.py "error" 0 0 0 "Recording failed - retrying" 2>/dev/null || true
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        python3 "$SCRIPT_DIR/send_progress.py" "error" 0 0 0 "Recording failed - retrying" || true
         sleep 10
         continue
     fi
@@ -160,7 +162,8 @@ while true; do
 
     FILE_SIZE=$(ls -lh /tmp/gps_iq_samples.dat 2>/dev/null | awk '{print $5}')
     echo "✅ Recording complete! Size: $FILE_SIZE"
-    python3 send_progress.py "recording" 100 300 300 "Recording complete" 2>/dev/null || true
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    python3 "$SCRIPT_DIR/send_progress.py" "recording" 100 300 300 "Recording complete" || true
 
     # Small delay to ensure file is fully written and closed
     sleep 1
@@ -172,7 +175,8 @@ while true; do
     echo "   Satellites will appear in UI immediately when tracked!"
     echo ""
 
-    python3 send_progress.py "processing" 0 0 120 "Starting GNSS-SDR processing" 2>/dev/null || true
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    python3 "$SCRIPT_DIR/send_progress.py" "processing" 0 0 120 "Starting GNSS-SDR processing" || true
 
     # Start GNSS-SDR with log parser to show satellites in UI immediately
     DYLD_LIBRARY_PATH="/usr/local/lib:$DYLD_LIBRARY_PATH" \
@@ -189,7 +193,8 @@ while true; do
         PROGRESS=$((WAIT_TIME * 100 / 120))
         [ $PROGRESS -gt 100 ] && PROGRESS=100
         SAT_COUNT=$(grep -c "Tracking of GPS L1 C/A signal started" /tmp/gnss_sdr_output.log 2>/dev/null || echo "0")
-        python3 send_progress.py "processing" "$PROGRESS" "$WAIT_TIME" "120" "Processing: $SAT_COUNT satellites tracked" 2>/dev/null || true
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        python3 "$SCRIPT_DIR/send_progress.py" "processing" "$PROGRESS" "$WAIT_TIME" "120" "Processing: $SAT_COUNT satellites tracked" || true
 
         # Show progress
         if [ $((WAIT_TIME % 15)) -eq 0 ]; then
@@ -199,7 +204,8 @@ while true; do
         # Timeout after 120 seconds
         if [ $WAIT_TIME -ge 120 ]; then
             echo "   ⚠️  Timeout reached, stopping GNSS-SDR..."
-            python3 send_progress.py "processing" 100 120 120 "Processing complete (timeout)" 2>/dev/null || true
+            SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            python3 "$SCRIPT_DIR/send_progress.py" "processing" 100 120 120 "Processing complete (timeout)" || true
             kill -9 $GNSS_PID 2>/dev/null || true
             break
         fi
