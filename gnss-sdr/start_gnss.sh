@@ -179,13 +179,35 @@ while true; do
     python3 "$SCRIPT_DIR/send_progress.py" "processing" 0 0 120 "Starting GNSS-SDR processing" || true
 
     # Start GNSS-SDR with log parser to show satellites in UI immediately
+    # Run pipeline and get the actual gnss-sdr PID
     DYLD_LIBRARY_PATH="/usr/local/lib:$DYLD_LIBRARY_PATH" \
         gnss-sdr --config_file=gnss_sdr_file.conf 2>&1 | python3 parse_gnss_logs.py | tee /tmp/gnss_sdr_output.log &
-    GNSS_PID=$!
+    PIPELINE_PID=$!
 
-    # Wait for GNSS-SDR to finish
+    # Start a background timeout killer - force kill pipeline after timeout
+    # This ensures we never hang forever waiting for processes
+    (
+        sleep 125  # Wait for main loop (120s) + 5s grace period
+        # First kill gnss-sdr if still running
+        pkill -P $$ -f "gnss-sdr --config_file" 2>/dev/null || true
+        sleep 2  # Give parse_gnss_logs time to flush data
+        # Then kill parse_gnss_logs
+        pkill -P $$ -f "parse_gnss_logs" 2>/dev/null || true
+        sleep 1
+        # Finally kill tee (the main culprit that hangs)
+        pkill -P $$ -f "tee /tmp/gnss_sdr_output" 2>/dev/null || true
+    ) &
+    TIMEOUT_PID=$!
+
+    # Wait for GNSS-SDR to finish (with timeout)
     WAIT_TIME=0
-    while kill -0 $GNSS_PID 2>/dev/null; do
+    while [ $WAIT_TIME -lt 120 ]; do
+        # Check if gnss-sdr process is still running (use -x for exact match to avoid matching script path)
+        if ! pgrep -x gnss-sdr > /dev/null 2>&1; then
+            echo "   ✅ GNSS-SDR completed"
+            break
+        fi
+
         sleep 5
         WAIT_TIME=$((WAIT_TIME + 5))
 
@@ -200,33 +222,51 @@ while true; do
         if [ $((WAIT_TIME % 15)) -eq 0 ]; then
             echo "   [${WAIT_TIME}s] Processing... ($SAT_COUNT satellites tracked so far)"
         fi
-
-        # Timeout after 120 seconds
-        if [ $WAIT_TIME -ge 120 ]; then
-            echo "   ⚠️  Timeout reached, stopping GNSS-SDR..."
-            SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-            python3 "$SCRIPT_DIR/send_progress.py" "processing" 100 120 120 "Processing complete (timeout)" || true
-            kill -9 $GNSS_PID 2>/dev/null || true
-            break
-        fi
     done
+
+    # Kill timeout process if still running
+    kill $TIMEOUT_PID 2>/dev/null || true
+
+    # If timeout reached or gnss-sdr finished, kill the entire pipeline
+    if [ $WAIT_TIME -ge 120 ]; then
+        echo "   ⚠️  Timeout reached, stopping GNSS-SDR..."
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        python3 "$SCRIPT_DIR/send_progress.py" "processing" 100 120 120 "Processing complete (timeout)" || true
+    fi
+
+    # Kill all processes in the pipeline (gnss-sdr, parse_gnss_logs.py, tee)
+    pkill -P $$ -f "gnss-sdr --config_file" 2>/dev/null || true
+    pkill -P $$ -f "parse_gnss_logs" 2>/dev/null || true
+    pkill -P $$ -f "tee /tmp/gnss_sdr_output" 2>/dev/null || true
+    sleep 1
 
     echo ""
     echo "✅ Processing complete!"
 
     # Show results
     SAT_COUNT=$(grep -c "Tracking of GPS L1 C/A signal started" /tmp/gnss_sdr_output.log 2>/dev/null || echo "0")
+
+    # Send completion message to UI with final results
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [ "$SAT_COUNT" -gt 0 ]; then
+        # Get list of tracked PRNs
+        PRN_LIST=$(grep "Tracking of GPS L1 C/A signal started" /tmp/gnss_sdr_output.log 2>/dev/null | \
+            sed 's/.*PRN //' | sed 's/ .*//' | head -8 | tr '\n' ',' | sed 's/,$//')
+
+        python3 "$SCRIPT_DIR/send_progress.py" "complete" 100 0 0 "✅ Analysis complete! Tracked $SAT_COUNT satellites (PRN: $PRN_LIST)" || true
+
         echo "   🛰️  Tracked $SAT_COUNT satellites:"
         grep "Tracking of GPS L1 C/A signal started" /tmp/gnss_sdr_output.log 2>/dev/null | \
             sed 's/.*PRN /     • PRN /' | head -8
     else
+        python3 "$SCRIPT_DIR/send_progress.py" "complete" 100 0 0 "⚠️ Analysis complete. No satellites tracked - check antenna placement" || true
         echo "   ⚠️  No satellites tracked (antenna may need better sky view)"
     fi
     echo ""
 
-    echo "Waiting 5 seconds before next cycle..."
-    sleep 5
+    echo "Cycle complete! Waiting 10 seconds before next cycle..."
+    echo "  (You can view results in the UI, or stop collection to end)"
+    sleep 10
     echo ""
 
     CYCLE=$((CYCLE + 1))

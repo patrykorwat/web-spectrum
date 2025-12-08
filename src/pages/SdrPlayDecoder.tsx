@@ -498,8 +498,8 @@ return (
       <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(33, 150, 243, 0.08)', borderRadius: '8px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
         {progressPhase ? (
           <>
-            <Typography variant="h6" sx={{ marginBottom: '10px', color: 'info.main' }}>
-              📊 Current Status: {progressPhase === 'recording' ? '📡 Recording' : progressPhase === 'processing' ? '🛰️ Processing' : '⏳ ' + progressPhase}
+            <Typography variant="h6" sx={{ marginBottom: '10px', color: progressPhase === 'complete' ? 'success.main' : 'info.main' }}>
+              📊 Current Status: {progressPhase === 'recording' ? '📡 Recording' : progressPhase === 'processing' ? '🛰️ Processing' : progressPhase === 'complete' ? '✅ Complete' : '⏳ ' + progressPhase}
             </Typography>
 
             <Box sx={{ marginBottom: '10px' }}>
@@ -667,12 +667,66 @@ return (
               </>
             )}
           </Typography>
-          {decodedItems.length > 0 && decodedItems[0].msg?.jamming && (
-            <Typography variant="body2" sx={{ marginTop: '10px', color: decodedItems[0].msg.jamming.isJammed ? 'error.main' : 'success.main' }}>
-              <strong>Jamming:</strong> {decodedItems[0].msg.jamming.isJammed ?
-                `⚠️ DETECTED (${decodedItems[0].msg.jamming.jammingType})` :
-                '✓ None detected'}
-            </Typography>
+          {decodedItems.length > 0 && decodedItems[0].msg?.jamming && progressPhase === 'complete' && (
+            <Box sx={{ marginTop: '10px', padding: '10px', backgroundColor: decodedItems[0].msg.jamming.isJammed ? 'rgba(244, 67, 54, 0.1)' : 'rgba(76, 175, 80, 0.1)', borderRadius: '4px' }}>
+              <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.isJammed ? 'error.main' : 'success.main', fontWeight: 'bold' }}>
+                {decodedItems[0].msg.jamming.isJammed ? '⚠️ Signal Anomaly Detected' : '✓ Signal Quality Normal'}
+              </Typography>
+              {decodedItems[0].msg.jamming.isJammed && (
+                <Box sx={{ marginTop: '8px', fontSize: '0.85em' }}>
+                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
+                    <strong>Type:</strong> {decodedItems[0].msg.jamming.jammingType.replace(/_/g, ' ')}
+                    {(decodedItems[0].msg.jamming.jammingType.includes('SPOOFING') ||
+                      decodedItems[0].msg.jamming.jammingType === 'MATCHED_POWER_ATTACK') && ' 🚨'}
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
+                    <strong>Severity:</strong> {decodedItems[0].msg.jamming.jammingSeverity || 'UNKNOWN'}
+                    {' '}(Confidence: {(decodedItems[0].msg.jamming.jammerConfidence * 100).toFixed(0)}%)
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
+                    <strong>Detection Method:</strong> {(decodedItems[0].msg.jamming.detectionMethod || 'UNKNOWN').replace(/_/g, ' ')}
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
+                    <strong>Avg C/N0:</strong> {decodedItems[0].msg.jamming.avgCN0.toFixed(1)} dB-Hz
+                    {' '}(Variation: ±{decodedItems[0].msg.jamming.cn0Variation?.toFixed(1) || '0.0'} dB)
+                  </Typography>
+                  {decodedItems[0].msg.jamming.cn0StdDev && (
+                    <Typography variant="body2" sx={{ color: 'text.primary' }}>
+                      <strong>Multi-Satellite Analysis:</strong> Std Dev = {decodedItems[0].msg.jamming.cn0StdDev.toFixed(1)} dB
+                      {' '}(Range: {decodedItems[0].msg.jamming.minCN0.toFixed(1)} - {decodedItems[0].msg.jamming.maxCN0.toFixed(1)} dB-Hz)
+                    </Typography>
+                  )}
+                  {decodedItems[0].msg.jamming.cn0Correlation !== undefined && (
+                    <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.cn0Correlation > 0.95 ? 'error.main' : 'text.primary' }}>
+                      <strong>C/N0 Correlation:</strong> {(decodedItems[0].msg.jamming.cn0Correlation * 100).toFixed(1)}%
+                      {decodedItems[0].msg.jamming.cn0Correlation > 0.95 && ' ⚠️ High correlation - spoofing indicator!'}
+                    </Typography>
+                  )}
+                  {decodedItems[0].msg.jamming.dopplerVariation !== undefined && (
+                    <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.dopplerVariation < 20 ? 'warning.main' : 'text.primary' }}>
+                      <strong>Doppler Analysis:</strong> Variation = {decodedItems[0].msg.jamming.dopplerVariation.toFixed(1)} Hz
+                      {decodedItems[0].msg.jamming.dopplerVariation < 20 && ' ⚠️ Low variation - possible spoofing!'}
+                    </Typography>
+                  )}
+                  {decodedItems[0].msg.jamming.jammingType === 'HIGH_CONFIDENCE_SPOOFING' && (
+                    <Typography variant="caption" sx={{ display: 'block', marginTop: '8px', color: 'error.main', fontWeight: 'bold', fontStyle: 'italic' }}>
+                      🚨 HIGH CONFIDENCE SPOOFING DETECTED! Multiple indicators confirm attack. DO NOT TRUST POSITION DATA.
+                    </Typography>
+                  )}
+                  {(decodedItems[0].msg.jamming.jammingType === 'POSSIBLE_SPOOFING' ||
+                    decodedItems[0].msg.jamming.jammingType === 'SUSPECTED_SPOOFING_LOW_DOPPLER') && (
+                    <Typography variant="caption" sx={{ display: 'block', marginTop: '8px', color: 'warning.main', fontStyle: 'italic' }}>
+                      ⚠️ Spoofing indicators detected. Verify position accuracy with alternative sources.
+                    </Typography>
+                  )}
+                </Box>
+              )}
+              {!decodedItems[0].msg.jamming.isJammed && (
+                <Typography variant="body2" sx={{ marginTop: '5px', fontSize: '0.85em', color: 'text.secondary' }}>
+                  Avg C/N0: {decodedItems[0].msg.jamming.avgCN0.toFixed(1)} dB-Hz | {decodedItems[0].msg.jamming.numTracking} satellites tracked
+                </Typography>
+              )}
+            </Box>
           )}
         </Box>
 

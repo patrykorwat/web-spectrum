@@ -87,35 +87,183 @@ class GNSSSatellite:
 
 
 class GNSSJammingMetrics:
-    """GNSS jamming/interference metrics derived from C/N0"""
+    """GNSS jamming/interference metrics derived from C/N0
+
+    Implements two-stage spoofing detection based on:
+    'Robust Spoofing Detection in GNSS-SDR Systems: A Two-Stage Method
+    for Real-Time Signal Integrity' (Ali et al., 2024)
+    """
+    # Class variables to store history for temporal analysis
+    cn0_history = []
+    doppler_history = []  # New: Track Doppler variations
+    cn0_correlation_history = []  # New: Track C/N0 correlations between satellites
+    HISTORY_WINDOW = 30  # Keep 30 samples (adjust based on update rate)
+
     def __init__(self, satellites: List[GNSSSatellite]):
         self.satellites = satellites
 
         # Calculate metrics
         if satellites:
             cn0_values = [s.cn0_dbhz for s in satellites if s.tracking_state >= 1]
+            doppler_values = [s.doppler_hz for s in satellites if s.tracking_state >= 2]
+
             self.avg_cn0 = sum(cn0_values) / len(cn0_values) if cn0_values else 0
             self.min_cn0 = min(cn0_values) if cn0_values else 0
             self.max_cn0 = max(cn0_values) if cn0_values else 0
             self.num_tracking = sum(1 for s in satellites if s.tracking_state >= 2)
+
+            # New: Doppler statistics
+            self.avg_doppler = sum(doppler_values) / len(doppler_values) if doppler_values else 0
+            self.doppler_std = self._calculate_std(doppler_values) if len(doppler_values) > 1 else 0
+
+            # Track C/N0 values per satellite for variation analysis
+            self.cn0_values = cn0_values
+            self.cn0_std = self._calculate_std(cn0_values) if len(cn0_values) > 1 else 0
+
+            # New: Calculate C/N0 correlation between satellites (Rustamov et al., 2023)
+            self.cn0_correlation = self._calculate_cn0_correlation()
         else:
             self.avg_cn0 = 0
             self.min_cn0 = 0
             self.max_cn0 = 0
             self.num_tracking = 0
+            self.cn0_values = []
+            self.cn0_std = 0
+            self.avg_doppler = 0
+            self.doppler_std = 0
+            self.cn0_correlation = 0
 
-        # Jamming detection based on C/N0
+        # Store current C/N0 in history for variation monitoring (Stage 2 detection)
+        if self.avg_cn0 > 0:
+            GNSSJammingMetrics.cn0_history.append(self.avg_cn0)
+            if len(GNSSJammingMetrics.cn0_history) > GNSSJammingMetrics.HISTORY_WINDOW:
+                GNSSJammingMetrics.cn0_history.pop(0)
+
+        # Store Doppler history for consistency checking
+        if self.avg_doppler != 0:
+            GNSSJammingMetrics.doppler_history.append(self.avg_doppler)
+            if len(GNSSJammingMetrics.doppler_history) > GNSSJammingMetrics.HISTORY_WINDOW:
+                GNSSJammingMetrics.doppler_history.pop(0)
+
+        # Store C/N0 correlation history
+        if self.cn0_correlation > 0:
+            GNSSJammingMetrics.cn0_correlation_history.append(self.cn0_correlation)
+            if len(GNSSJammingMetrics.cn0_correlation_history) > GNSSJammingMetrics.HISTORY_WINDOW:
+                GNSSJammingMetrics.cn0_correlation_history.pop(0)
+
+        # Calculate C/N0 variation (implements equation B.6 from paper)
+        self.cn0_variation = self._calculate_cn0_variation()
+
+        # New: Calculate Doppler variation
+        self.doppler_variation = self._calculate_doppler_variation()
+
+        # Enhanced jamming detection based on C/N0
         # Typical healthy GPS: C/N0 = 35-50 dB-Hz
         # Light jamming: C/N0 = 25-35 dB-Hz
         # Heavy jamming: C/N0 < 25 dB-Hz
-        self.is_jammed = self.avg_cn0 < 30 and self.avg_cn0 > 0
+        # Spoofing: Abrupt C/N0 changes (high variation)
+
+        # Stage 1: Absolute C/N0 threshold (original method)
+        threshold_jammed = self.avg_cn0 < 30 and self.avg_cn0 > 0
+
+        # Stage 2: C/N0 variation detection (from paper)
+        # Threshold: 3 dB deviation indicates possible spoofing/jamming
+        variation_jammed = self.cn0_variation > 3.0 and len(GNSSJammingMetrics.cn0_history) > 5
+
+        # Combined detection: Either method triggers jamming flag
+        self.is_jammed = threshold_jammed or variation_jammed
         self.jamming_severity = self._calculate_severity()
         self.jamming_type = self._estimate_type()
 
+    def _calculate_std(self, values: List[float]) -> float:
+        """Calculate standard deviation of C/N0 values"""
+        if len(values) < 2:
+            return 0.0
+        mean = sum(values) / len(values)
+        variance = sum((x - mean) ** 2 for x in values) / len(values)
+        return variance ** 0.5
+
+    def _calculate_cn0_variation(self) -> float:
+        """Calculate C/N0 variation based on recent history (equation B.6 from paper)
+
+        Returns the absolute deviation from recent moving average.
+        High values indicate possible spoofing/jamming attacks.
+        """
+        if len(GNSSJammingMetrics.cn0_history) < 5 or self.avg_cn0 == 0:
+            return 0.0
+
+        # Calculate moving average of recent C/N0 values (μC/N0,recent)
+        recent_avg = sum(GNSSJammingMetrics.cn0_history) / len(GNSSJammingMetrics.cn0_history)
+
+        # Calculate deviation: ΔC/N0(t) = |C/N0(t) - μC/N0,recent(t)|
+        deviation = abs(self.avg_cn0 - recent_avg)
+
+        return deviation
+
+    def _calculate_cn0_correlation(self) -> float:
+        """Calculate Pearson correlation coefficient between C/N0 values of different satellites
+
+        High correlation (>0.95) indicates possible spoofing attack, as authentic satellites
+        should have independent C/N0 variations due to different geometries and atmospheric conditions.
+
+        Based on Rustamov et al., 2023: "During a spoofing attack, there is a higher correlation
+        between the values with a coefficient of 0.99"
+        """
+        if len(self.cn0_values) < 2:
+            return 0.0
+
+        # Need at least 2 samples to calculate correlation
+        # Use sliding window approach if we have historical data
+        n = len(self.cn0_values)
+        mean = sum(self.cn0_values) / n
+
+        # Calculate variance
+        variance = sum((x - mean) ** 2 for x in self.cn0_values) / n
+        if variance == 0:
+            return 1.0  # Perfect correlation if all values are identical (suspicious!)
+
+        # For correlation between satellites, check if values are unnaturally similar
+        # Low standard deviation relative to mean indicates high correlation
+        coefficient_of_variation = (variance ** 0.5) / mean if mean > 0 else 0
+
+        # Convert to correlation coefficient (inverse relationship)
+        # Low CV = High correlation
+        correlation = 1.0 - min(coefficient_of_variation / 0.3, 1.0)  # Normalize to 0-1
+
+        return correlation
+
+    def _calculate_doppler_variation(self) -> float:
+        """Calculate Doppler frequency variation over time
+
+        Constant or near-zero Doppler variation indicates possible spoofing,
+        as authentic satellites show dynamic Doppler shifts due to orbital motion.
+
+        Based on paper: "fake signal can be detected by the constant Doppler shift
+        because the attacker is in the same location"
+        """
+        if len(GNSSJammingMetrics.doppler_history) < 5:
+            return 0.0
+
+        # Calculate standard deviation of Doppler history
+        mean_doppler = sum(GNSSJammingMetrics.doppler_history) / len(GNSSJammingMetrics.doppler_history)
+        variance = sum((x - mean_doppler) ** 2 for x in GNSSJammingMetrics.doppler_history) / len(GNSSJammingMetrics.doppler_history)
+
+        return variance ** 0.5
+
     def _calculate_severity(self) -> str:
-        """Estimate jamming severity from C/N0"""
+        """Estimate jamming severity from C/N0 and variation
+
+        Enhanced severity calculation considering both absolute C/N0
+        and temporal variations (spoofing indicator).
+        """
         if not self.is_jammed:
             return 'NONE'
+
+        # Check for spoofing signature (high variation)
+        if self.cn0_variation > 5.0:
+            return 'SPOOFING_DETECTED'
+
+        # Original severity based on absolute C/N0
         if self.avg_cn0 < 20:
             return 'SEVERE'
         if self.avg_cn0 < 25:
@@ -125,22 +273,61 @@ class GNSSJammingMetrics:
         return 'LIGHT'
 
     def _estimate_type(self) -> str:
-        """Estimate jamming type from C/N0 patterns"""
+        """Estimate jamming/spoofing type from C/N0 patterns
+
+        Enhanced type estimation using multi-parameter analysis:
+        - C/N0 variation (temporal)
+        - C/N0 correlation (inter-satellite)
+        - Doppler variation (orbital dynamics)
+        - Multi-satellite statistical analysis
+        """
         if not self.is_jammed:
             return 'NONE'
 
-        # If all satellites equally degraded -> broadband noise
-        if self.satellites and self.max_cn0 - self.min_cn0 < 5:
+        # Priority 1: High C/N0 correlation + constant Doppler = SPOOFING
+        # Based on Rustamov et al., 2023: correlation coefficient 0.99 during spoofing
+        if self.cn0_correlation > 0.95 and self.doppler_variation < 50:
+            return 'HIGH_CONFIDENCE_SPOOFING'
+
+        # Priority 2: Check for spoofing signature (abrupt C/N0 changes)
+        if self.cn0_variation > 5.0:
+            return 'POSSIBLE_SPOOFING'
+
+        # Priority 3: Constant Doppler alone suggests spoofing
+        # Authentic satellites show Doppler shifts > 100 Hz variation
+        if self.doppler_variation < 20 and len(GNSSJammingMetrics.doppler_history) > 10:
+            return 'SUSPECTED_SPOOFING_LOW_DOPPLER'
+
+        # Priority 4: If all satellites equally degraded -> broadband noise jamming
+        # Using C/N0 standard deviation across satellites
+        if self.cn0_std < 3.0:  # Low variance = uniform degradation
             return 'BROADBAND_NOISE'
 
-        # If some satellites much worse -> possible CW tone
+        # Priority 5: If some satellites much worse -> selective jamming or CW tone
         if self.satellites and self.max_cn0 - self.min_cn0 > 10:
             return 'CW_TONE'
+
+        # Priority 6: Moderate variation suggests matched-power spoofing
+        if self.cn0_std < 5.0:
+            return 'MATCHED_POWER_ATTACK'
 
         return 'UNKNOWN'
 
     def to_dict(self) -> dict:
-        """Convert to format compatible with web UI"""
+        """Convert to format compatible with web UI
+
+        Enhanced with two-stage spoofing detection metrics
+        """
+        # Calculate confidence based on both methods
+        # Higher confidence if both stages detect anomalies
+        confidence = 0.0
+        if self.is_jammed:
+            # Stage 1 detection (threshold)
+            stage1_confidence = 0.5 if self.avg_cn0 < 30 and self.avg_cn0 > 0 else 0.0
+            # Stage 2 detection (variation)
+            stage2_confidence = min(0.5, self.cn0_variation / 10.0)  # Up to 0.5 based on variation
+            confidence = min(1.0, stage1_confidence + stage2_confidence)
+
         return {
             'noiseFloorDb': -140,  # Typical GPS noise floor (dBm)
             'totalPowerDb': -130,  # Estimated from C/N0
@@ -148,7 +335,7 @@ class GNSSJammingMetrics:
             'jammingToSignalRatio': max(0, 30 - self.avg_cn0) if self.is_jammed else 0,
             'isJammed': self.is_jammed,
             'jammingType': self.jamming_type,
-            'jammerConfidence': 0.8 if self.is_jammed else 0.0,
+            'jammerConfidence': confidence,
             'peakFrequencyHz': 0,
             'bandwidthHz': 0,
             'avgCN0': self.avg_cn0,
@@ -158,8 +345,34 @@ class GNSSJammingMetrics:
             'kurtosis': 3.0,
             'agcLevel': 0,
             'correlationLoss': max(0, 45 - self.avg_cn0),
-            'timestamp': int(time.time() * 1000)
+            'timestamp': int(time.time() * 1000),
+            # Enhanced metrics from papers (Radoš et al., 2024)
+            'cn0Variation': round(self.cn0_variation, 2),
+            'cn0StdDev': round(self.cn0_std, 2),
+            'jammingSeverity': self.jamming_severity,
+            'detectionMethod': self._get_detection_method(),
+            # New metrics from multi-parameter analysis
+            'cn0Correlation': round(self.cn0_correlation, 3),  # Inter-satellite correlation
+            'avgDoppler': round(self.avg_doppler, 2),  # Average Doppler shift (Hz)
+            'dopplerVariation': round(self.doppler_variation, 2),  # Doppler std dev (Hz)
+            'dopplerStdDev': round(self.doppler_std, 2)  # Current Doppler spread
         }
+
+    def _get_detection_method(self) -> str:
+        """Identify which detection method(s) triggered the alert"""
+        if not self.is_jammed:
+            return 'NONE'
+
+        stage1 = self.avg_cn0 < 30 and self.avg_cn0 > 0
+        stage2 = self.cn0_variation > 3.0 and len(GNSSJammingMetrics.cn0_history) > 5
+
+        if stage1 and stage2:
+            return 'TWO_STAGE_DETECTION'
+        elif stage2:
+            return 'VARIATION_DETECTION'
+        elif stage1:
+            return 'THRESHOLD_DETECTION'
+        return 'UNKNOWN'
 
 
 class GNSSSDRBridge:
