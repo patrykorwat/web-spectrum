@@ -72,6 +72,8 @@ Direct browser-based signal processing for ADS-B and ISM protocols:
 
 ### SDRPlay
 
+**🆕 Now with Direct API Access!**
+
 **Two modes available:**
 
 #### 1. Professional Mode (GNSS-SDR Backend) - **RECOMMENDED**
@@ -82,31 +84,38 @@ Uses industry-standard GNSS-SDR software for professional-grade signal processin
 - ✅ Multi-constellation support
 - ✅ Battle-tested algorithms
 - ✅ **Single-command operation** (auto-starts GNSS-SDR + SDRPlay streamer)
+- 🆕 **Direct API access** - Full control via Python (bypasses SoapySDR/gr-osmosdr)
 
 📚 **Documentation:**
+- 🆕 [Direct API Access](./gnss-sdr/README_DIRECT_API.md) - **NEW!** Full Python control of SDRplay
 - [Complete Setup Guide](./gnss-sdr/GNSS_SDR_COMPLETE_SETUP.md) - **START HERE** for full installation
 - [Quick Setup](./gnss-sdr/GNSS_SDR_SETUP.md) - Basic setup guide
 - [Troubleshooting](./gnss-sdr/GNSS_SDR_COMPLETE_SETUP.md#-troubleshooting) - Common issues and fixes
 
-**Quick Start:**
+**Quick Start (ONE COMMAND):**
 ```bash
 # Install GNSS-SDR (one-time setup, ~30-40 min)
 cd gnss-sdr
 ./install_gnss_sdr.sh
 
-# Terminal 1: Start web UI (from repo root)
-npm start
-# Opens at http://localhost:3005
+# Start everything with one script!
+cd ..  # Back to repo root
+./start_all.sh direct  # 🆕 Direct API mode (RECOMMENDED - full control!)
+# OR
+./start_all.sh file    # File-based mode (default)
+# OR
+./start_all.sh live    # Live streaming mode (has Osmosdr compatibility issues)
 
-# Terminal 2: Run bridge with auto-start (starts GNSS-SDR + SDRPlay streamer!)
-cd gnss-sdr
-./run_gnss_sdr_bridge.sh
-
-# Browser:
-# 1. Go to SDRPlay Decoder page
-# 2. Select "Professional Mode (GNSS-SDR)" at the top
-# 3. Click "Listen & Decode"
+# Opens browser at http://localhost:3005 automatically
+# Go to SDRPlay Decoder page and click "Listen & Decode"
 ```
+
+**Three Processing Modes:**
+- 🆕 **Direct API mode** (`./start_all.sh direct`) - **RECOMMENDED!** Full Python control, no compatibility issues
+- **File mode** (`./start_all.sh file`) - Record-then-process cycles (default, more stable)
+- **Live mode** (`./start_all.sh live`) - Real-time via Osmosdr (has setIQBalance crash issues)
+
+📖 **See:** [DIRECT_API_QUICKSTART.md](./DIRECT_API_QUICKSTART.md) for detailed direct mode guide
 
 **Alternative: File-Based Processing** (works immediately, no web UI needed)
 ```bash

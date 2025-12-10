@@ -51,6 +51,15 @@ from datetime import datetime
 import sys
 from typing import Dict, List, Optional
 
+# Import protobuf for PVT message parsing
+try:
+    from monitor_pvt_pb2 import MonitorPvt
+    PROTOBUF_AVAILABLE = True
+except ImportError:
+    print("⚠️  Warning: protobuf module not available. Position fixes will not be displayed.")
+    print("   Install with: python3 -m pip install protobuf --break-system-packages")
+    PROTOBUF_AVAILABLE = False
+
 # GNSS-SDR Monitor message format
 # See: https://github.com/gnss-sdr/gnss-sdr/blob/next/src/core/monitor/gnss_synchro_monitor.cc
 
@@ -140,13 +149,13 @@ class GNSSJammingMetrics:
                 GNSSJammingMetrics.cn0_history.pop(0)
 
         # Store Doppler history for consistency checking
-        if self.avg_doppler != 0:
+        if hasattr(self, 'avg_doppler') and self.avg_doppler != 0:
             GNSSJammingMetrics.doppler_history.append(self.avg_doppler)
             if len(GNSSJammingMetrics.doppler_history) > GNSSJammingMetrics.HISTORY_WINDOW:
                 GNSSJammingMetrics.doppler_history.pop(0)
 
         # Store C/N0 correlation history
-        if self.cn0_correlation > 0:
+        if hasattr(self, 'cn0_correlation') and self.cn0_correlation > 0:
             GNSSJammingMetrics.cn0_correlation_history.append(self.cn0_correlation)
             if len(GNSSJammingMetrics.cn0_correlation_history) > GNSSJammingMetrics.HISTORY_WINDOW:
                 GNSSJammingMetrics.cn0_correlation_history.pop(0)
@@ -154,8 +163,8 @@ class GNSSJammingMetrics:
         # Calculate C/N0 variation (implements equation B.6 from paper)
         self.cn0_variation = self._calculate_cn0_variation()
 
-        # New: Calculate Doppler variation
-        self.doppler_variation = self._calculate_doppler_variation()
+        # New: Calculate Doppler variation (only if we have doppler data)
+        self.doppler_variation = self._calculate_doppler_variation() if hasattr(self, 'avg_doppler') else 0.0
 
         # Enhanced jamming detection based on C/N0
         # Typical healthy GPS: C/N0 = 35-50 dB-Hz
@@ -352,10 +361,10 @@ class GNSSJammingMetrics:
             'jammingSeverity': self.jamming_severity,
             'detectionMethod': self._get_detection_method(),
             # New metrics from multi-parameter analysis
-            'cn0Correlation': round(self.cn0_correlation, 3),  # Inter-satellite correlation
-            'avgDoppler': round(self.avg_doppler, 2),  # Average Doppler shift (Hz)
-            'dopplerVariation': round(self.doppler_variation, 2),  # Doppler std dev (Hz)
-            'dopplerStdDev': round(self.doppler_std, 2)  # Current Doppler spread
+            'cn0Correlation': round(getattr(self, 'cn0_correlation', 0), 3),  # Inter-satellite correlation
+            'avgDoppler': round(getattr(self, 'avg_doppler', 0), 2),  # Average Doppler shift (Hz)
+            'dopplerVariation': round(getattr(self, 'doppler_variation', 0), 2),  # Doppler std dev (Hz)
+            'dopplerStdDev': round(getattr(self, 'doppler_std', 0), 2)  # Current Doppler spread
         }
 
     def _get_detection_method(self) -> str:
@@ -407,6 +416,9 @@ class GNSSSDRBridge:
         self.sdrplay_connected = True  # Track SDRPlay connection status
         self.last_device_check = time.time()
         self.device_error_sent = False  # Only send error once
+        self.position_fix: Optional[Dict] = None  # Store latest position fix from PVT
+        self.last_data_time = time.time()  # Track when we last received data
+        self.gnss_sdr_crashed = False  # Track if GNSS-SDR crashed
 
     def start_gnss_sdr(self):
         """Start GNSS-SDR as a subprocess"""
@@ -571,12 +583,38 @@ class GNSSSDRBridge:
             self.recorder_process = None
 
     def check_sdrplay_connected(self):
-        """Check if SDRPlay device is still connected"""
-        # Simplified check: Just assume device is connected for now
-        # The device check was causing the bridge to crash
-        # Better to not show the alert than to crash the bridge
-        # Users will know if device is disconnected when recording fails
+        """Check if SDRPlay device is still connected
+
+        For live mode (Osmosdr), we check:
+        1. If GNSS-SDR process is still running
+        2. If we're receiving data (via last_data_time tracking)
+
+        Note: We don't use SoapySDRUtil because it can hang/crash.
+        Instead, we infer connection status from data flow.
+        """
+        # Check if GNSS-SDR process is alive (if we started it)
+        if self.gnss_sdr_process:
+            if self.gnss_sdr_process.poll() is not None:
+                # Process died - likely Osmosdr couldn't connect or device disconnected
+                return False
+
+        # For live mode, assume connected (GNSS-SDR manages Osmosdr connection)
+        # If device disconnects, GNSS-SDR will exit and we'll detect it above
         return True
+
+    def _get_device_error_message(self) -> Optional[str]:
+        """Get appropriate error message based on device status"""
+        if self.gnss_sdr_crashed:
+            return 'GNSS-SDR stopped unexpectedly. Check if SDRPlay is connected and not in use by another program.'
+
+        if not self.sdrplay_connected:
+            now = time.time()
+            if (now - self.last_data_time) > 120.0:
+                return f'No data received for {int(now - self.last_data_time)}s. Osmosdr connection may be lost.'
+            else:
+                return 'SDRPlay/Osmosdr connection lost. Check device and restart GNSS-SDR.'
+
+        return None
 
     def setup_udp_receiver(self):
         """Setup UDP socket to receive GNSS-SDR monitor data"""
@@ -601,6 +639,56 @@ class GNSSSDRBridge:
 
         self.udp_socket.settimeout(1.0)  # 1 second timeout
         print(f"✓ Listening for GNSS-SDR data on UDP port {self.gnss_sdr_port}")
+
+    async def monitor_gnss_sdr_process(self):
+        """Monitor GNSS-SDR process health and restart if needed"""
+        print("✓ Starting GNSS-SDR process monitor...")
+        print("")
+
+        while self.running:
+            # Check if GNSS-SDR process is still alive (if we started it)
+            if self.gnss_sdr_process and not self.gnss_sdr_crashed:
+                poll_result = self.gnss_sdr_process.poll()
+                if poll_result is not None:
+                    # Process exited
+                    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ❌ GNSS-SDR CRASHED (exit code: {poll_result})")
+
+                    # Try to get error output
+                    try:
+                        stdout, stderr = self.gnss_sdr_process.communicate(timeout=1)
+                        if stderr and len(stderr) > 0:
+                            print(f"   Last error: {stderr[-500:]}")  # Last 500 chars
+                    except:
+                        pass
+
+                    # Mark as crashed and notify clients
+                    self.gnss_sdr_crashed = True
+                    self.sdrplay_connected = False
+
+                    # Send error to clients
+                    error_msg = {
+                        'protocol': 'GNSS_GPS_L1',
+                        'satellites': [],
+                        'deviceStatus': {
+                            'sdrplayConnected': False,
+                            'gnssSdrCrashed': True,
+                            'deviceError': 'GNSS-SDR stopped unexpectedly. Check if SDRPlay is connected and accessible.'
+                        },
+                        'timestamp': int(time.time() * 1000)
+                    }
+                    await self.broadcast_message(json.dumps(error_msg))
+
+                    print("   Possible causes:")
+                    print("   • SDRPlay device disconnected")
+                    print("   • Device is in use by another program")
+                    print("   • Osmosdr driver issue")
+                    print("   • Insufficient permissions")
+                    print("")
+                    print("   Manual restart required:")
+                    print(f"   gnss-sdr --config_file={self.config_file}")
+
+            # Check every 2 seconds
+            await asyncio.sleep(2.0)
 
     async def handle_client(self, websocket):
         """Handle WebSocket client connection"""
@@ -645,27 +733,46 @@ class GNSSSDRBridge:
 
     def parse_gnss_sdr_message(self, data: bytes):
         """
-        Parse GNSS-SDR monitor message
+        Parse GNSS-SDR monitor PVT message using protobuf
 
-        For now, we'll use a simplified parser. Full implementation would use
-        the Protobuf schema from gnss-sdr/src/core/monitor/gnss_synchro.proto
+        GNSS-SDR sends position/velocity/time (PVT) solutions via UDP
+        using the MonitorPvt protobuf format defined in monitor_pvt.proto
 
-        Message format (simplified):
-        - uint32: PRN
-        - float: C/N0 (dB-Hz)
-        - float: Doppler (Hz)
-        - uint8: Tracking state
+        Returns dict with position fix data or None if parsing fails
         """
-        try:
-            # This is a simplified parser. Real implementation needs protobuf
-            # For now, we'll parse text-based output if available
-            # or implement full protobuf parsing
-
-            # Placeholder: generate mock data for testing
-            # TODO: Implement proper protobuf parsing
+        if not PROTOBUF_AVAILABLE:
             return None
+
+        try:
+            # Parse protobuf message
+            pvt = MonitorPvt()
+            pvt.ParseFromString(data)
+
+            # Convert ECEF to lat/lon/height is already done by GNSS-SDR
+            position_data = {
+                'latitude': pvt.latitude,       # degrees, positive = North
+                'longitude': pvt.longitude,     # degrees, positive = East
+                'height': pvt.height,           # meters above WGS84 ellipsoid
+                'valid_sats': pvt.valid_sats,   # number of satellites used in solution
+                'solution_status': pvt.solution_status,  # RTKLIB status
+                'pdop': pvt.pdop,               # Position Dilution of Precision
+                'hdop': pvt.hdop,               # Horizontal DOP
+                'vdop': pvt.vdop,               # Vertical DOP
+                'gdop': pvt.gdop,               # Geometric DOP
+                'velocity_east': pvt.vel_e,     # m/s
+                'velocity_north': pvt.vel_n,    # m/s
+                'velocity_up': pvt.vel_u,       # m/s
+                'course_over_ground': pvt.cog,  # degrees
+                'gps_week': pvt.week,
+                'time_of_week_ms': pvt.tow_at_current_symbol_ms,
+                'utc_time': pvt.utc_time,
+                'geohash': pvt.geohash if pvt.geohash else None
+            }
+
+            return position_data
+
         except Exception as e:
-            print(f"Error parsing GNSS-SDR message: {e}")
+            print(f"Error parsing GNSS-SDR protobuf message: {e}")
             return None
 
     async def read_gnss_sdr_data(self):
@@ -684,17 +791,31 @@ class GNSSSDRBridge:
                 data, addr = self.udp_socket.recvfrom(4096)
                 message_count += 1
                 last_data_time = time.time()
+                self.last_data_time = last_data_time  # Update global tracker
                 waiting_warned = False
 
-                # Parse message (TODO: implement proper parsing)
-                # sat_data = self.parse_gnss_sdr_message(data)
+                # Parse PVT message from GNSS-SDR monitor
+                position_data = self.parse_gnss_sdr_message(data)
+                if position_data:
+                    # Store latest position fix
+                    self.position_fix = position_data
+                    # Log first position fix
+                    if message_count == 1:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] "
+                              f"📍 Position fix: {position_data['latitude']:.6f}°N, "
+                              f"{position_data['longitude']:.6f}°E, "
+                              f"{position_data['height']:.1f}m | "
+                              f"{position_data['valid_sats']} satellites")
 
                 # Report reception every second
                 now = time.time()
                 if now - last_report >= 1.0:
+                    pos_info = ""
+                    if self.position_fix:
+                        pos_info = f" | 📍 Position: {self.position_fix['valid_sats']} sats, HDOP {self.position_fix['hdop']:.1f}"
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] "
                           f"📡 Received {message_count} monitor packets from GNSS-SDR | "
-                          f"🌐 {len(self.clients)} WebSocket client(s) connected")
+                          f"🌐 {len(self.clients)} WebSocket client(s) connected{pos_info}")
                     message_count = 0
                     last_report = now
 
@@ -731,14 +852,28 @@ class GNSSSDRBridge:
             now = time.time()
             if now - self.last_device_check >= 5.0:
                 device_connected = self.check_sdrplay_connected()
-                if device_connected != self.sdrplay_connected:
-                    # Connection status changed
-                    self.sdrplay_connected = device_connected
+
+                # Also check data flow - if no data for >2 minutes, assume connection issue
+                data_stale = (now - self.last_data_time) > 120.0
+
+                if device_connected != self.sdrplay_connected or (device_connected and data_stale):
+                    # Connection status changed or data stopped flowing
+                    self.sdrplay_connected = device_connected and not data_stale
                     self.device_error_sent = False  # Reset flag on status change
-                    if not device_connected:
-                        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ⚠️  SDRPlay DISCONNECTED!")
+
+                    if not self.sdrplay_connected:
+                        if not device_connected:
+                            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ⚠️  GNSS-SDR PROCESS DIED!")
+                            print("   Likely causes: SDRPlay disconnected or Osmosdr driver error")
+                        elif data_stale:
+                            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ⚠️  NO DATA FOR {int(now - self.last_data_time)}s!")
+                            print("   Possible causes:")
+                            print("   • Osmosdr connection lost")
+                            print("   • SDRPlay in use by another program")
+                            print("   • No GPS signal (check antenna placement)")
                     else:
-                        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ✅ SDRPlay reconnected")
+                        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ✅ Connection restored")
+
                 self.last_device_check = now
 
             if self.clients:
@@ -760,9 +895,15 @@ class GNSSSDRBridge:
                     'timestamp': int(time.time() * 1000),
                     'deviceStatus': {
                         'sdrplayConnected': self.sdrplay_connected,
-                        'deviceError': 'SDRPlay device disconnected! Check USB connection.' if not self.sdrplay_connected else None
+                        'gnssSdrCrashed': self.gnss_sdr_crashed,
+                        'dataStale': (time.time() - self.last_data_time) > 120.0,
+                        'deviceError': self._get_device_error_message()
                     }
                 }
+
+                # Add position fix data if available
+                if self.position_fix:
+                    result['positionFix'] = self.position_fix
 
                 # Create a hash of the satellite data (excluding timestamp) to detect changes
                 satellite_data_str = json.dumps({
@@ -919,6 +1060,7 @@ class GNSSSDRBridge:
             # Start background tasks
             gnss_task = asyncio.create_task(self.read_gnss_sdr_data())
             broadcast_task = asyncio.create_task(self.broadcast_results())
+            monitor_task = asyncio.create_task(self.monitor_gnss_sdr_process())
 
             try:
                 await asyncio.Future()  # Run forever
@@ -926,6 +1068,7 @@ class GNSSSDRBridge:
                 self.running = False
                 gnss_task.cancel()
                 broadcast_task.cancel()
+                monitor_task.cancel()
                 raise
 
     def cleanup(self):
@@ -973,7 +1116,7 @@ Example usage:
     parser.add_argument('--websocket-port', type=int, default=8766,
                         help='WebSocket server port (default: 8766)')
     parser.add_argument('--config', type=str, default='gnss_sdr_sdrplay_direct.conf',
-                        help='GNSS-SDR config file (default: gnss_sdr_sdrplay_direct.conf)')
+                        help='GNSS-SDR config file (default: gnss_sdr_sdrplay_direct.conf, or gnss_sdr_fifo.conf for FIFO mode)')
     parser.add_argument('--no-auto-start', action='store_true',
                         help='Do not automatically start GNSS-SDR (manual mode)')
     parser.add_argument('--no-sdrplay', action='store_true',

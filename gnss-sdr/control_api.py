@@ -33,9 +33,24 @@ class GNSSControlHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/status':
             self._set_headers()
+
+            # Check if SDRplay Direct Mode streamer is running
+            direct_mode_active = False
+            direct_mode_info = ''
+            try:
+                result = subprocess.run(['pgrep', '-f', 'sdrplay_soapy_streamer'],
+                                      capture_output=True, text=True, timeout=1)
+                if result.returncode == 0:
+                    direct_mode_active = True
+                    direct_mode_info = 'SDRplay streamer is running continuously (Direct Mode)'
+            except:
+                pass
+
             status = {
                 'running': GNSSControlHandler.gnss_process is not None and GNSSControlHandler.gnss_process.poll() is None,
-                'pid': GNSSControlHandler.gnss_process_pid
+                'pid': GNSSControlHandler.gnss_process_pid,
+                'directMode': direct_mode_active,
+                'directModeInfo': direct_mode_info
             }
             self.wfile.write(json.dumps(status).encode())
         else:
@@ -63,12 +78,18 @@ class GNSSControlHandler(BaseHTTPRequestHandler):
         # Start GNSS data collection
         try:
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            start_script = os.path.join(script_dir, 'start_gnss.sh')
+            # Use file-based mode: record samples then process
+            start_script = os.path.join(script_dir, 'start_gnss_file.sh')
 
-            # Start the process
+            # Start the process with proper environment
+            env = os.environ.copy()
+            env['DYLD_LIBRARY_PATH'] = '/usr/local/lib:' + env.get('DYLD_LIBRARY_PATH', '')
+            env['PYTHONPATH'] = '/opt/homebrew/lib/python3.14/site-packages:' + env.get('PYTHONPATH', '')
+
             process = subprocess.Popen(
                 ['/bin/bash', start_script],
                 cwd=script_dir,
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -112,7 +133,7 @@ class GNSSControlHandler(BaseHTTPRequestHandler):
                 pass  # Process already dead
 
             # Also kill by name to be sure
-            subprocess.run(['pkill', '-9', '-f', 'start_gnss.sh'], capture_output=True)
+            subprocess.run(['pkill', '-9', '-f', 'start_gnss'], capture_output=True)  # Matches both start_gnss.sh and start_gnss_live.sh
             subprocess.run(['pkill', '-9', '-f', 'record_iq'], capture_output=True)
             subprocess.run(['pkill', '-9', '-f', 'gnss-sdr'], capture_output=True)
             subprocess.run(['pkill', '-9', '-f', 'parse_gnss_logs'], capture_output=True)

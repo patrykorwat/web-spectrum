@@ -80,19 +80,19 @@ while true; do
     # NOTE: Bridge monitoring is handled by start_all.sh
 
     # Step 1: Record
-    echo "📡 Recording 15 minutes (for stable tracking) of GPS samples..."
+    echo "📡 Recording 5 minutes of GPS samples (allows ephemeris decoding for position fix)..."
     echo "   Output: /tmp/gps_iq_samples.dat"
     echo ""
 
     rm -f /tmp/gps_iq_samples.dat
 
-    # Start recording in background
-    python3 record_iq_samples.py /tmp/gps_iq_samples.dat 900 &
+    # Start recording in background (5 minutes for ephemeris decoding)
+    python3 record_iq_samples.py /tmp/gps_iq_samples.dat 300 &
     RECORD_PID=$!
 
     # Start progress reporter in background (independent of recording)
     (
-        RECORD_DURATION=900
+        RECORD_DURATION=300
         START_TIME=$(date +%s)
         while true; do
             ELAPSED=$(($(date +%s) - START_TIME))

@@ -158,3 +158,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+*.geojson
+*.gpx
+*.kml
+GSDR*

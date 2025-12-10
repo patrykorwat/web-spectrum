@@ -103,6 +103,10 @@ function SdrPlayDecoder() {
   const [gnssCollectionLoading, setGnssCollectionLoading] = useState<boolean>(false);
   const [gnssCollectionError, setGnssCollectionError] = useState<string | null>(null);
 
+  // Direct mode status
+  const [directModeActive, setDirectModeActive] = useState<boolean>(false);
+  const [directModeInfo, setDirectModeInfo] = useState<string>('');
+
   const pointsBatch = 10000;
 
   const xPoints: Array<number> = [];
@@ -131,9 +135,19 @@ function SdrPlayDecoder() {
         const data = await response.json();
         setGnssCollectionRunning(data.running);
         setGnssCollectionError(null);
+
+        // Check for direct mode information
+        if (data.directMode) {
+          setDirectModeActive(true);
+          setDirectModeInfo(data.directModeInfo || 'SDRplay streamer running continuously');
+        } else {
+          setDirectModeActive(false);
+          setDirectModeInfo('');
+        }
       } catch (error) {
         // Control API not running - that's okay
         setGnssCollectionRunning(false);
+        setDirectModeActive(false);
       }
     };
 
@@ -304,6 +318,16 @@ return (
                     // Create a message object for display with jamming info
                     let decoded = '';
 
+                    // Position fix status
+                    if (result.positionFix) {
+                      decoded += `📍 POSITION FIX: ${result.positionFix.latitude.toFixed(6)}°N, ${result.positionFix.longitude.toFixed(6)}°E `;
+                      decoded += `(±${result.positionFix.hdop.toFixed(1)}m HDOP, ${result.positionFix.valid_sats} sats) | `;
+                    } else if (result.satellites.length > 0) {
+                      decoded += `🔍 Searching for position fix (tracking ${result.satellites.length} satellites) | `;
+                    } else {
+                      decoded += `⏳ Waiting for satellites | `;
+                    }
+
                     // Jamming status (if present)
                     if (result.jamming.isJammed) {
                       // Show frequency only for CW tone jamming (not broadband noise)
@@ -311,15 +335,18 @@ return (
                         ? `, Freq: ${(result.jamming.peakFrequencyHz / 1000).toFixed(1)}kHz`
                         : '';
                       decoded += `⚠️ JAMMING: ${result.jamming.jammingType} (J/S: ${result.jamming.jammingToSignalRatio.toFixed(1)}dB${freqInfo}) | `;
+                    } else {
+                      decoded += `✅ No jamming detected | `;
                     }
 
-                    // Satellite info
+                    // Satellite info summary
                     if (result.satellites.length > 0) {
-                      decoded += `${result.satellites.length} sat(s): ${result.satellites.map(s => `${s.prn}(${s.snr.toFixed(1)}dB)`).join(', ')}`;
+                      const avgCN0 = result.satellites.reduce((sum, s) => sum + s.cn0, 0) / result.satellites.length;
+                      decoded += `Satellites: ${result.satellites.length} tracked, avg C/N0: ${avgCN0.toFixed(1)} dB-Hz`;
                     } else if (result.jamming.isJammed) {
-                      decoded += 'No satellites - jammed';
+                      decoded += 'No satellites visible (jammed)';
                     } else {
-                      decoded += `No satellites | Noise: ${result.jamming.noiseFloorDb.toFixed(1)}dB (relative)`;
+                      decoded += `Noise floor: ${result.jamming.noiseFloorDb.toFixed(1)}dB (relative)`;
                     }
 
                     const gnssMsg = {
@@ -448,8 +475,27 @@ return (
       </Box>
     </Box>
 
-    {/* Collection Control Buttons - ALWAYS visible in GNSS-SDR mode */}
-    {bridgeMode === 'gnss-sdr' && (
+    {/* Direct Mode Status Banner - Show when streamer is running */}
+    {bridgeMode === 'gnss-sdr' && directModeActive && (
+      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(33, 150, 243, 0.12)', borderRadius: '8px', border: '2px solid rgba(33, 150, 243, 0.5)' }}>
+        <Typography variant="h6" sx={{ marginBottom: '10px', color: 'info.main', display: 'flex', alignItems: 'center', gap: 1 }}>
+          🚀 Direct SDRplay Mode Active
+        </Typography>
+        <Typography variant="body2" sx={{ marginBottom: '10px' }}>
+          ✅ SDRplay streamer is running continuously in the background<br />
+          ✅ Data is being captured at 2.05 MSPS (~16 MB/sec)<br />
+          ✅ File: /tmp/gps_iq_samples.dat
+        </Typography>
+        <Typography variant="caption" sx={{ display: 'block', padding: '10px', backgroundColor: 'rgba(255, 152, 0, 0.15)', borderRadius: '4px', border: '1px solid rgba(255, 152, 0, 0.4)' }}>
+          ℹ️ <strong>Important:</strong> In direct mode, you don't need to click "Start Collection"!<br />
+          The SDRplay streamer is already capturing data continuously.<br />
+          <strong>Just click "Listen & Decode"</strong> above, then wait 1-3 minutes for satellite acquisition.
+        </Typography>
+      </Box>
+    )}
+
+    {/* Collection Control Buttons - Only show in file mode (when direct mode is NOT active) */}
+    {bridgeMode === 'gnss-sdr' && !directModeActive && (
       <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(76, 175, 80, 0.08)', borderRadius: '8px', border: '1px solid rgba(76, 175, 80, 0.3)' }}>
         <Typography variant="h6" sx={{ marginBottom: '15px', color: 'success.main' }}>
           🎛️ Data Collection Control
@@ -493,8 +539,113 @@ return (
       </Box>
     )}
 
-    {/* Progress Status - Show when collection is running */}
-    {bridgeMode === 'gnss-sdr' && gnssCollectionRunning && websocketReceiver?.isConnected() && (
+    {/* Satellite Acquisition Status - Always show when connected in GNSS-SDR mode */}
+    {bridgeMode === 'gnss-sdr' && websocketReceiver?.isConnected() && (
+      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(76, 175, 80, 0.08)', borderRadius: '8px', border: '1px solid rgba(76, 175, 80, 0.3)' }}>
+        <Typography variant="h6" sx={{ marginBottom: '10px', color: 'success.main' }}>
+          🛰️ Satellite Acquisition Status
+        </Typography>
+        <Box>
+          <Typography variant="body1" sx={{ marginBottom: '5px' }}>
+            {decodedItems.length > 0 && decodedItems[0].msg?.satellites ? (
+              <>
+                <strong>Satellites Tracking:</strong> {decodedItems[0].msg.satellites.length} satellite(s)
+                {decodedItems[0].msg.satellites.length > 0 && (
+                  <Box sx={{ marginTop: '10px', fontSize: '0.9em' }}>
+                    {decodedItems[0].msg.satellites.slice(0, 8).map((sat: any, idx: number) => (
+                      <Box key={idx} sx={{ marginBottom: '5px', paddingLeft: '20px' }}>
+                        • PRN {sat.prn}: C/N0 = {sat.cn0?.toFixed(1) || 'N/A'} dB-Hz,
+                        Doppler = {sat.dopplerHz?.toFixed(0) || 'N/A'} Hz,
+                        State = {sat.state || 'UNKNOWN'}
+                      </Box>
+                    ))}
+                    {decodedItems[0].msg.satellites.length > 8 && (
+                      <Box sx={{ paddingLeft: '20px', fontStyle: 'italic', color: 'text.secondary' }}>
+                        ... and {decodedItems[0].msg.satellites.length - 8} more
+                      </Box>
+                    )}
+                  </Box>
+                )}
+              </>
+            ) : (
+              <>
+                <strong>Status:</strong> Acquiring satellites... (this may take 1-3 minutes)
+                <br />
+                <Typography variant="caption" color="text.secondary">
+                  GNSS-SDR is processing signals. Satellite data will appear once acquisition completes.
+                </Typography>
+              </>
+            )}
+          </Typography>
+
+          {/* Jamming/Spoofing Detection Info */}
+          {decodedItems.length > 0 && decodedItems[0].msg?.jamming && (
+            <Box sx={{ marginTop: '10px', padding: '10px', backgroundColor: decodedItems[0].msg.jamming.isJammed ? 'rgba(244, 67, 54, 0.1)' : 'rgba(76, 175, 80, 0.1)', borderRadius: '4px' }}>
+              <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.isJammed ? 'error.main' : 'success.main', fontWeight: 'bold' }}>
+                {decodedItems[0].msg.jamming.isJammed ? '⚠️ Signal Anomaly Detected' : '✓ Signal Quality Normal'}
+              </Typography>
+              {decodedItems[0].msg.jamming.isJammed && (
+                <Box sx={{ marginTop: '8px', fontSize: '0.85em' }}>
+                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
+                    <strong>Type:</strong> {decodedItems[0].msg.jamming.jammingType.replace(/_/g, ' ')}
+                    {(decodedItems[0].msg.jamming.jammingType.includes('SPOOFING') ||
+                      decodedItems[0].msg.jamming.jammingType === 'MATCHED_POWER_ATTACK') && ' 🚨'}
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
+                    <strong>Severity:</strong> {decodedItems[0].msg.jamming.jammingSeverity || 'UNKNOWN'}
+                    {' '}(Confidence: {(decodedItems[0].msg.jamming.jammerConfidence * 100).toFixed(0)}%)
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
+                    <strong>Detection Method:</strong> {(decodedItems[0].msg.jamming.detectionMethod || 'UNKNOWN').replace(/_/g, ' ')}
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
+                    <strong>Avg C/N0:</strong> {decodedItems[0].msg.jamming.avgCN0.toFixed(1)} dB-Hz
+                    {' '}(Variation: ±{decodedItems[0].msg.jamming.cn0Variation?.toFixed(1) || '0.0'} dB)
+                  </Typography>
+                  {decodedItems[0].msg.jamming.cn0StdDev && (
+                    <Typography variant="body2" sx={{ color: 'text.primary' }}>
+                      <strong>Multi-Satellite Analysis:</strong> Std Dev = {decodedItems[0].msg.jamming.cn0StdDev.toFixed(1)} dB
+                      {' '}(Range: {decodedItems[0].msg.jamming.minCN0.toFixed(1)} - {decodedItems[0].msg.jamming.maxCN0.toFixed(1)} dB-Hz)
+                    </Typography>
+                  )}
+                  {decodedItems[0].msg.jamming.cn0Correlation !== undefined && (
+                    <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.cn0Correlation > 0.95 ? 'error.main' : 'text.primary' }}>
+                      <strong>C/N0 Correlation:</strong> {(decodedItems[0].msg.jamming.cn0Correlation * 100).toFixed(1)}%
+                      {decodedItems[0].msg.jamming.cn0Correlation > 0.95 && ' ⚠️ High correlation - spoofing indicator!'}
+                    </Typography>
+                  )}
+                  {decodedItems[0].msg.jamming.dopplerVariation !== undefined && (
+                    <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.dopplerVariation < 20 ? 'warning.main' : 'text.primary' }}>
+                      <strong>Doppler Analysis:</strong> Variation = {decodedItems[0].msg.jamming.dopplerVariation.toFixed(1)} Hz
+                      {decodedItems[0].msg.jamming.dopplerVariation < 20 && ' ⚠️ Low variation - possible spoofing!'}
+                    </Typography>
+                  )}
+                  {decodedItems[0].msg.jamming.jammingType === 'HIGH_CONFIDENCE_SPOOFING' && (
+                    <Typography variant="caption" sx={{ display: 'block', marginTop: '8px', color: 'error.main', fontWeight: 'bold', fontStyle: 'italic' }}>
+                      🚨 HIGH CONFIDENCE SPOOFING DETECTED! Multiple indicators confirm attack. DO NOT TRUST POSITION DATA.
+                    </Typography>
+                  )}
+                  {(decodedItems[0].msg.jamming.jammingType === 'POSSIBLE_SPOOFING' ||
+                    decodedItems[0].msg.jamming.jammingType === 'SUSPECTED_SPOOFING_LOW_DOPPLER') && (
+                    <Typography variant="caption" sx={{ display: 'block', marginTop: '8px', color: 'warning.main', fontStyle: 'italic' }}>
+                      ⚠️ Spoofing indicators detected. Verify position accuracy with alternative sources.
+                    </Typography>
+                  )}
+                </Box>
+              )}
+              {!decodedItems[0].msg.jamming.isJammed && (
+                <Typography variant="body2" sx={{ marginTop: '5px', fontSize: '0.85em', color: 'text.secondary' }}>
+                  Avg C/N0: {decodedItems[0].msg.jamming.avgCN0.toFixed(1)} dB-Hz | {decodedItems[0].msg.jamming.numTracking} satellites tracked
+                </Typography>
+              )}
+            </Box>
+          )}
+        </Box>
+      </Box>
+    )}
+
+    {/* Progress Status - Show when collection is running in file mode */}
+    {bridgeMode === 'gnss-sdr' && gnssCollectionRunning && websocketReceiver?.isConnected() && !directModeActive && (
       <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(33, 150, 243, 0.08)', borderRadius: '8px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
         {progressPhase ? (
           <>
@@ -561,24 +712,23 @@ return (
         <Typography variant="body2" sx={{ display: 'block', marginBottom: '15px', padding: '15px', backgroundColor: 'rgba(76, 175, 80, 0.1)', borderRadius: '4px', border: '1px solid rgba(76, 175, 80, 0.3)' }}>
           <strong>🚀 Setup (one time):</strong><br />
           <Box component="span" sx={{ display: 'block', fontFamily: 'monospace', backgroundColor: 'rgba(0,0,0,0.3)', padding: '10px', borderRadius: '4px', marginTop: '10px', fontSize: '1.1em' }}>
-            ./start_all.sh
+            ./start_all.sh direct
           </Box>
           <span style={{ fontSize: '0.95em', display: 'block', marginTop: '10px' }}>
-            This starts the backend services (Control API + GNSS Bridge).
+            This starts everything in <strong>Direct SDRplay Mode</strong>: SDRplay streamer, GNSS-SDR, Control API, and GNSS Bridge.
           </span>
         </Typography>
 
         <Typography variant="body2" sx={{ display: 'block', marginBottom: '15px', padding: '15px', backgroundColor: 'rgba(33, 150, 243, 0.1)', borderRadius: '4px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
           <strong>📡 Usage (every time):</strong><br />
           <Box component="ol" sx={{ marginTop: '10px', paddingLeft: '20px', '& li': { marginBottom: '8px' } }}>
-            <li><strong>First:</strong> Click <strong>"Listen&Decode"</strong> (above) to connect to the bridge</li>
-            <li><strong>Then:</strong> Click <strong>"Start Collection"</strong> (below) to begin GPS recording</li>
-            <li>Wait ~8-10 minutes for first satellite data to appear</li>
-            <li>Use <strong>"Stop"</strong> or <strong>"Restart Collection"</strong> as needed</li>
+            <li><strong>Step 1:</strong> Click <strong>"Listen&Decode"</strong> (above) to connect to the bridge</li>
+            <li><strong>Step 2:</strong> Wait 1-3 minutes for satellite acquisition (GPS cold start)</li>
+            <li><strong>Step 3:</strong> Satellites and jamming/spoofing info will appear automatically!</li>
           </Box>
         </Typography>
         <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', color: 'info.main', fontStyle: 'italic' }}>
-          ℹ️ First cycle takes 5-10 minutes (recording + ephemeris decoding). Be patient!
+          ℹ️ In direct mode, data is captured continuously. No need to click "Start Collection"!
         </Typography>
 
         {/* Processing Timeline */}
@@ -632,103 +782,63 @@ return (
           </Box>
         )}
 
-        <Typography variant="h6" sx={{ marginBottom: '10px', color: 'success.main' }}>
-          🛰️ Satellite Acquisition Status
-        </Typography>
-        <Box>
-          <Typography variant="body1" sx={{ marginBottom: '5px' }}>
-            {decodedItems.length > 0 && decodedItems[0].msg?.satellites ? (
-              <>
-                <strong>Satellites Tracking:</strong> {decodedItems[0].msg.satellites.length} satellite(s)
-                {decodedItems[0].msg.satellites.length > 0 && (
-                  <Box sx={{ marginTop: '10px', fontSize: '0.9em' }}>
-                    {decodedItems[0].msg.satellites.slice(0, 8).map((sat: any, idx: number) => (
-                      <Box key={idx} sx={{ marginBottom: '5px', paddingLeft: '20px' }}>
-                        • PRN {sat.prn}: C/N0 = {sat.cn0?.toFixed(1) || 'N/A'} dB-Hz,
-                        Doppler = {sat.dopplerHz?.toFixed(0) || 'N/A'} Hz,
-                        State = {sat.state || 'UNKNOWN'}
-                      </Box>
-                    ))}
-                    {decodedItems[0].msg.satellites.length > 8 && (
-                      <Box sx={{ paddingLeft: '20px', fontStyle: 'italic', color: 'text.secondary' }}>
-                        ... and {decodedItems[0].msg.satellites.length - 8} more
-                      </Box>
-                    )}
-                  </Box>
-                )}
-              </>
-            ) : (
-              <>
-                <strong>Status:</strong> Acquiring satellites... (this may take 30-60 seconds)
-                <br />
-                <Typography variant="caption" color="text.secondary">
-                  GNSS-SDR is processing signals. Satellite data will appear once acquisition completes.
-                </Typography>
-              </>
-            )}
-          </Typography>
-          {decodedItems.length > 0 && decodedItems[0].msg?.jamming && progressPhase === 'complete' && (
-            <Box sx={{ marginTop: '10px', padding: '10px', backgroundColor: decodedItems[0].msg.jamming.isJammed ? 'rgba(244, 67, 54, 0.1)' : 'rgba(76, 175, 80, 0.1)', borderRadius: '4px' }}>
-              <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.isJammed ? 'error.main' : 'success.main', fontWeight: 'bold' }}>
-                {decodedItems[0].msg.jamming.isJammed ? '⚠️ Signal Anomaly Detected' : '✓ Signal Quality Normal'}
+        {/* Position Fix Display */}
+        {decodedItems[0]?.msg?.positionFix && (
+          <Box sx={{ marginTop: '15px', padding: '15px', border: '2px solid #4CAF50', borderRadius: '8px', backgroundColor: 'rgba(76, 175, 80, 0.05)' }}>
+            <Typography variant="h6" sx={{ marginBottom: '10px', fontSize: '1em', color: '#4CAF50' }}>
+              📍 Position Fix
+            </Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <Typography variant="body2">
+                <strong>Latitude:</strong> {decodedItems[0].msg.positionFix.latitude.toFixed(6)}° {decodedItems[0].msg.positionFix.latitude >= 0 ? 'N' : 'S'}
               </Typography>
-              {decodedItems[0].msg.jamming.isJammed && (
-                <Box sx={{ marginTop: '8px', fontSize: '0.85em' }}>
-                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
-                    <strong>Type:</strong> {decodedItems[0].msg.jamming.jammingType.replace(/_/g, ' ')}
-                    {(decodedItems[0].msg.jamming.jammingType.includes('SPOOFING') ||
-                      decodedItems[0].msg.jamming.jammingType === 'MATCHED_POWER_ATTACK') && ' 🚨'}
+              <Typography variant="body2">
+                <strong>Longitude:</strong> {decodedItems[0].msg.positionFix.longitude.toFixed(6)}° {decodedItems[0].msg.positionFix.longitude >= 0 ? 'E' : 'W'}
+              </Typography>
+              <Typography variant="body2">
+                <strong>Height:</strong> {decodedItems[0].msg.positionFix.height.toFixed(1)} m (above WGS84)
+              </Typography>
+              <Typography variant="body2">
+                <strong>Satellites Used:</strong> {decodedItems[0].msg.positionFix.valid_sats}
+              </Typography>
+              <Typography variant="body2">
+                <strong>HDOP:</strong> {decodedItems[0].msg.positionFix.hdop.toFixed(2)}
+                {decodedItems[0].msg.positionFix.hdop < 2 ? ' (Excellent)' :
+                 decodedItems[0].msg.positionFix.hdop < 5 ? ' (Good)' :
+                 decodedItems[0].msg.positionFix.hdop < 10 ? ' (Moderate)' : ' (Poor)'}
+              </Typography>
+              <Typography variant="body2">
+                <strong>VDOP:</strong> {decodedItems[0].msg.positionFix.vdop.toFixed(2)}
+              </Typography>
+              {decodedItems[0].msg.positionFix.velocity_east !== undefined && (
+                <>
+                  <Typography variant="body2">
+                    <strong>Velocity:</strong> {Math.sqrt(
+                      Math.pow(decodedItems[0].msg.positionFix.velocity_east, 2) +
+                      Math.pow(decodedItems[0].msg.positionFix.velocity_north, 2)
+                    ).toFixed(2)} m/s
                   </Typography>
-                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
-                    <strong>Severity:</strong> {decodedItems[0].msg.jamming.jammingSeverity || 'UNKNOWN'}
-                    {' '}(Confidence: {(decodedItems[0].msg.jamming.jammerConfidence * 100).toFixed(0)}%)
+                  <Typography variant="body2">
+                    <strong>Course:</strong> {decodedItems[0].msg.positionFix.course_over_ground.toFixed(1)}°
                   </Typography>
-                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
-                    <strong>Detection Method:</strong> {(decodedItems[0].msg.jamming.detectionMethod || 'UNKNOWN').replace(/_/g, ' ')}
-                  </Typography>
-                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
-                    <strong>Avg C/N0:</strong> {decodedItems[0].msg.jamming.avgCN0.toFixed(1)} dB-Hz
-                    {' '}(Variation: ±{decodedItems[0].msg.jamming.cn0Variation?.toFixed(1) || '0.0'} dB)
-                  </Typography>
-                  {decodedItems[0].msg.jamming.cn0StdDev && (
-                    <Typography variant="body2" sx={{ color: 'text.primary' }}>
-                      <strong>Multi-Satellite Analysis:</strong> Std Dev = {decodedItems[0].msg.jamming.cn0StdDev.toFixed(1)} dB
-                      {' '}(Range: {decodedItems[0].msg.jamming.minCN0.toFixed(1)} - {decodedItems[0].msg.jamming.maxCN0.toFixed(1)} dB-Hz)
-                    </Typography>
-                  )}
-                  {decodedItems[0].msg.jamming.cn0Correlation !== undefined && (
-                    <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.cn0Correlation > 0.95 ? 'error.main' : 'text.primary' }}>
-                      <strong>C/N0 Correlation:</strong> {(decodedItems[0].msg.jamming.cn0Correlation * 100).toFixed(1)}%
-                      {decodedItems[0].msg.jamming.cn0Correlation > 0.95 && ' ⚠️ High correlation - spoofing indicator!'}
-                    </Typography>
-                  )}
-                  {decodedItems[0].msg.jamming.dopplerVariation !== undefined && (
-                    <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.dopplerVariation < 20 ? 'warning.main' : 'text.primary' }}>
-                      <strong>Doppler Analysis:</strong> Variation = {decodedItems[0].msg.jamming.dopplerVariation.toFixed(1)} Hz
-                      {decodedItems[0].msg.jamming.dopplerVariation < 20 && ' ⚠️ Low variation - possible spoofing!'}
-                    </Typography>
-                  )}
-                  {decodedItems[0].msg.jamming.jammingType === 'HIGH_CONFIDENCE_SPOOFING' && (
-                    <Typography variant="caption" sx={{ display: 'block', marginTop: '8px', color: 'error.main', fontWeight: 'bold', fontStyle: 'italic' }}>
-                      🚨 HIGH CONFIDENCE SPOOFING DETECTED! Multiple indicators confirm attack. DO NOT TRUST POSITION DATA.
-                    </Typography>
-                  )}
-                  {(decodedItems[0].msg.jamming.jammingType === 'POSSIBLE_SPOOFING' ||
-                    decodedItems[0].msg.jamming.jammingType === 'SUSPECTED_SPOOFING_LOW_DOPPLER') && (
-                    <Typography variant="caption" sx={{ display: 'block', marginTop: '8px', color: 'warning.main', fontStyle: 'italic' }}>
-                      ⚠️ Spoofing indicators detected. Verify position accuracy with alternative sources.
-                    </Typography>
-                  )}
-                </Box>
+                </>
               )}
-              {!decodedItems[0].msg.jamming.isJammed && (
-                <Typography variant="body2" sx={{ marginTop: '5px', fontSize: '0.85em', color: 'text.secondary' }}>
-                  Avg C/N0: {decodedItems[0].msg.jamming.avgCN0.toFixed(1)} dB-Hz | {decodedItems[0].msg.jamming.numTracking} satellites tracked
+              {decodedItems[0].msg.positionFix.utc_time && (
+                <Typography variant="body2" sx={{ gridColumn: '1 / -1' }}>
+                  <strong>UTC Time:</strong> {decodedItems[0].msg.positionFix.utc_time}
+                </Typography>
+              )}
+              {decodedItems[0].msg.positionFix.geohash && (
+                <Typography variant="body2" sx={{ gridColumn: '1 / -1' }}>
+                  <strong>Geohash:</strong> <code>{decodedItems[0].msg.positionFix.geohash}</code>
                 </Typography>
               )}
             </Box>
-          )}
-        </Box>
+            <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', color: 'text.secondary' }}>
+              💡 Open in <a href={`https://www.google.com/maps?q=${decodedItems[0].msg.positionFix.latitude},${decodedItems[0].msg.positionFix.longitude}`} target="_blank" rel="noopener noreferrer" style={{ color: '#2196F3' }}>Google Maps</a>
+            </Typography>
+          </Box>
+        )}
 
         {/* Satellite Tracking History Chart */}
         {satelliteHistory.length > 1 && (
