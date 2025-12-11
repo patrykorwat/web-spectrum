@@ -287,6 +287,20 @@ return (
                     return [msg, ...prevDecodedItems];
                   });
                 } else if (isGNSS(protocol)) {
+                  // Check if this is a GNSS log message
+                  if (msg.msg && typeof msg.msg === 'object' && msg.msg.type === 'gnss_log') {
+                    // GNSS log message from parse_gnss_logs.py
+                    const logMsg = {
+                      decoded: msg.msg.message,
+                      time: new Date(msg.msg.timestamp),
+                      msg: msg.msg
+                    };
+                    setDecodedItems(prevDecodedItems => {
+                      return [logMsg, ...prevDecodedItems];
+                    });
+                    return; // Early return - don't process as regular GNSS data
+                  }
+
                   // GNSS processing
                   console.log(`[RtlDecoder] GNSS callback received, msg.msg type: ${msg.msg?.constructor?.name}, length: ${msg.msg?.length}`);
 
@@ -645,7 +659,7 @@ return (
     )}
 
     {/* Progress Status - Show when collection is running in file mode */}
-    {bridgeMode === 'gnss-sdr' && gnssCollectionRunning && websocketReceiver?.isConnected() && !directModeActive && (
+    {bridgeMode === 'gnss-sdr' && gnssCollectionRunning && websocketReceiver?.isConnected() && (
       <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(33, 150, 243, 0.08)', borderRadius: '8px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
         {progressPhase ? (
           <>
@@ -1065,7 +1079,7 @@ return (
         </TableRow>
       </TableHead>
       <TableBody>
-      {decodedItems.map((row, index) => (
+      {decodedItems.slice(0, 50).map((row, index) => (
           <TableRow
             key={index}
             sx={{ '&:last-child td, &:last-child th': { border: 0 } }}

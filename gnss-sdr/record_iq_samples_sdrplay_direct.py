@@ -24,6 +24,7 @@ class IQRecorder:
         self.start_time = None
         self.file_handle = None
         self.running = True
+        self._last_reported_second = -1
 
     def data_callback(self, samples):
         """Callback from SDRplay - write to file"""
@@ -44,13 +45,11 @@ class IQRecorder:
 
             # Progress report every second
             current_second = int(elapsed)
-            if hasattr(self, '_last_reported_second'):
-                if current_second > self._last_reported_second:
-                    percent = min(100, int((elapsed / self.duration) * 100))
-                    print(f"Recording: {percent}% ({current_second}/{self.duration} seconds)")
-                    self._last_reported_second = current_second
-            else:
-                self._last_reported_second = 0
+            if current_second > self._last_reported_second and current_second > 0:
+                percent = min(100, int((elapsed / self.duration) * 100))
+                print(f"Recording: {percent}% ({current_second}/{self.duration} seconds)")
+                sys.stdout.flush()
+                self._last_reported_second = current_second
 
     def run(self):
         """Main recording function"""

@@ -167,6 +167,14 @@ export class WebSocketReceiver {
         if (this.progressCallback) {
           this.progressCallback(message as ProgressMessage);
         }
+      } else if (message.type === 'status') {
+        console.log(`[WebSocket] Status: ${message.message} (collecting: ${message.collecting}, streaming: ${message.streaming})`);
+        // Status messages are informational - they confirm the collection is active
+        // The UI already polls the control API for status, so we can just log these
+      } else if (message.type === 'gnss_log') {
+        console.log(`[WebSocket] GNSS Log [${message.level}]: ${message.message}`);
+        // Forward GNSS log messages to the receiver for display in decoded table
+        this.receiver.receiveSamples(0, message);
       } else {
         console.log('[WebSocket] Received unknown message type:', message);
       }

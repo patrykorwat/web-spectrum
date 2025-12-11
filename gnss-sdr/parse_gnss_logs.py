@@ -9,12 +9,71 @@ import json
 import asyncio
 import websockets
 import sys
+import glob
 from datetime import datetime
 from collections import defaultdict
+
+# Force unbuffered output
+sys.stdout = sys.__stdout__
+sys.stderr = sys.__stderr__
+import os
+os.environ['PYTHONUNBUFFERED'] = '1'
 
 # Track currently tracked satellites
 tracked_satellites = {}
 last_update_time = None
+
+log_message_queue = []
+log_file_position = 0
+
+async def tail_log_file():
+    """Tail the GNSS-SDR log file for Loss of lock messages"""
+    global log_file_position
+
+    while True:
+        try:
+            # Find the latest gnss-sdr.log file
+            log_files = glob.glob('/var/folders/*/*/T/gnss-sdr.log')
+            if not log_files:
+                log_files = glob.glob('/tmp/gnss-sdr.log')
+
+            if log_files:
+                log_file = log_files[0]
+                with open(log_file, 'r') as f:
+                    # Seek to last position
+                    f.seek(log_file_position)
+                    new_lines = f.readlines()
+                    log_file_position = f.tell()
+
+                    # Parse new lines for Loss of lock
+                    for line in new_lines:
+                        if 'Loss of lock in channel' in line:
+                            match = re.search(r'Loss of lock in channel (\d+)', line)
+                            if match:
+                                channel = int(match.group(1))
+                                # Find which PRN was on this channel
+                                for prn, info in list(tracked_satellites.items()):
+                                    if info.get('channel') == channel:
+                                        del tracked_satellites[prn]
+                                        log_message_queue.append({
+                                            'type': 'gnss_log',
+                                            'level': 'warning',
+                                            'message': f'⚠️ Lost lock on GPS PRN {prn} (channel {channel})',
+                                            'timestamp': int(datetime.now().timestamp() * 1000)
+                                        })
+                                        break
+                                else:
+                                    # PRN unknown, just report channel
+                                    log_message_queue.append({
+                                        'type': 'gnss_log',
+                                        'level': 'warning',
+                                        'message': f'⚠️ Lost lock on channel {channel}',
+                                        'timestamp': int(datetime.now().timestamp() * 1000)
+                                    })
+        except Exception as e:
+            pass  # Ignore errors, just retry
+
+        await asyncio.sleep(0.5)  # Check every 500ms
 
 async def send_satellite_data(websocket_url='ws://localhost:8766'):
     """Connect to bridge WebSocket and send satellite updates"""
@@ -25,6 +84,13 @@ async def send_satellite_data(websocket_url='ws://localhost:8766'):
         try:
             current_time = datetime.now().timestamp()
             sat_count = len(tracked_satellites)
+
+            # Send log messages if any
+            if log_message_queue:
+                async with websockets.connect(websocket_url, ping_interval=None) as websocket:
+                    while log_message_queue:
+                        log_msg = log_message_queue.pop(0)
+                        await websocket.send(json.dumps(log_msg))
 
             # Send if: satellites changed OR 30 seconds passed OR we have satellites
             should_send = (
@@ -91,7 +157,16 @@ def parse_log_line(line):
             'start_time': datetime.now(),
             'cn0': 35.0 + (prn % 15)  # Fake C/N0 based on PRN
         }
-        print(f"🛰️  Tracking PRN {prn} on channel {channel} (total: {len(tracked_satellites)})")
+        print(f"🛰️  Tracking PRN {prn} on channel {channel} (total: {len(tracked_satellites)})", flush=True)
+        sys.stdout.flush()
+
+        # Send log message to UI
+        log_message_queue.append({
+            'type': 'gnss_log',
+            'level': 'info',
+            'message': f'🛰️ Started tracking GPS PRN {prn} on channel {channel}',
+            'timestamp': int(datetime.now().timestamp() * 1000)
+        })
         return True
 
     # Match: "Loss of lock in channel X"
@@ -103,6 +178,14 @@ def parse_log_line(line):
             if info.get('channel') == channel:
                 del tracked_satellites[prn]
                 print(f"⚠️  Lost lock on PRN {prn} channel {channel} (remaining: {len(tracked_satellites)})")
+
+                # Send log message to UI
+                log_message_queue.append({
+                    'type': 'gnss_log',
+                    'level': 'warning',
+                    'message': f'⚠️ Lost lock on GPS PRN {prn} (channel {channel})',
+                    'timestamp': int(datetime.now().timestamp() * 1000)
+                })
                 return True
 
     return False
@@ -121,8 +204,17 @@ async def main():
     print("Usage: gnss-sdr ... | python3 parse_gnss_logs.py")
     print("")
 
-    # Start WebSocket sender in background
+    # Start WebSocket sender and log file tailer in background
     asyncio.create_task(send_satellite_data())
+    asyncio.create_task(tail_log_file())
+
+    # Send startup message
+    log_message_queue.append({
+        'type': 'gnss_log',
+        'level': 'info',
+        'message': '🚀 GNSS-SDR log parser started - monitoring for satellite tracking events',
+        'timestamp': int(datetime.now().timestamp() * 1000)
+    })
 
     # Read from stdin (piped from GNSS-SDR)
     print("📖 Reading GNSS-SDR output from stdin...")
@@ -134,8 +226,9 @@ async def main():
             if not line:
                 break  # EOF
 
-            # Print the line (pass-through)
-            print(line, end='')
+            # Print the line (pass-through) with immediate flush
+            print(line, end='', flush=True)
+            sys.stdout.flush()
 
             # Parse for satellite tracking info
             parse_log_line(line.strip())

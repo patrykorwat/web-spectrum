@@ -84,6 +84,18 @@ export class LoggingReceiver implements SampleReceiver {
   }
 
   receiveSamples(frequency: number, data: ArrayBuffer | any): void {
+    // Check if data is a GNSS log message
+    if (isGNSS(this.protocol) && data && typeof data === 'object' && data.type === 'gnss_log') {
+      console.log(`[LoggingReceiver] Received GNSS log message: ${data.message}`);
+      // Pass the log message directly to the callback
+      this.onMsg({
+        time: new Date(data.timestamp),
+        msg: data,
+        decoded: data.message
+      });
+      return;
+    }
+
     // Check if data is already a GNSS result object (JSON from parse_gnss_logs)
     if (isGNSS(this.protocol) && data && typeof data === 'object' && 'satellites' in data && 'protocol' in data) {
       console.log(`[LoggingReceiver] Received pre-processed GNSS JSON data with ${data.satellites.length} satellites`);

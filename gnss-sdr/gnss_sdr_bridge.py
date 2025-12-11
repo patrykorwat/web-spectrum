@@ -585,20 +585,20 @@ class GNSSSDRBridge:
     def check_sdrplay_connected(self):
         """Check if SDRPlay device is still connected
 
-        For live mode (Osmosdr), we check:
+        For Direct API mode, we check:
         1. If GNSS-SDR process is still running
         2. If we're receiving data (via last_data_time tracking)
 
-        Note: We don't use SoapySDRUtil because it can hang/crash.
-        Instead, we infer connection status from data flow.
+        Note: Direct API streams via FIFO, so we infer connection status
+        from data flow and process health.
         """
         # Check if GNSS-SDR process is alive (if we started it)
         if self.gnss_sdr_process:
             if self.gnss_sdr_process.poll() is not None:
-                # Process died - likely Osmosdr couldn't connect or device disconnected
+                # Process died - likely SDRplay device disconnected or streaming stopped
                 return False
 
-        # For live mode, assume connected (GNSS-SDR manages Osmosdr connection)
+        # For live mode, assume connected (GNSS-SDR manages connection via FIFO)
         # If device disconnects, GNSS-SDR will exit and we'll detect it above
         return True
 
@@ -610,9 +610,9 @@ class GNSSSDRBridge:
         if not self.sdrplay_connected:
             now = time.time()
             if (now - self.last_data_time) > 120.0:
-                return f'No data received for {int(now - self.last_data_time)}s. Osmosdr connection may be lost.'
+                return f'No data received for {int(now - self.last_data_time)}s. SDRplay streaming may be interrupted.'
             else:
-                return 'SDRPlay/Osmosdr connection lost. Check device and restart GNSS-SDR.'
+                return 'SDRplay Direct API connection lost. Check device and restart streaming.'
 
         return None
 
@@ -681,7 +681,7 @@ class GNSSSDRBridge:
                     print("   Possible causes:")
                     print("   • SDRPlay device disconnected")
                     print("   • Device is in use by another program")
-                    print("   • Osmosdr driver issue")
+                    print("   • SDRplay Direct API streaming stopped")
                     print("   • Insufficient permissions")
                     print("")
                     print("   Manual restart required:")
@@ -864,11 +864,11 @@ class GNSSSDRBridge:
                     if not self.sdrplay_connected:
                         if not device_connected:
                             print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ⚠️  GNSS-SDR PROCESS DIED!")
-                            print("   Likely causes: SDRPlay disconnected or Osmosdr driver error")
+                            print("   Likely causes: SDRPlay disconnected or Direct API streaming stopped")
                         elif data_stale:
                             print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ⚠️  NO DATA FOR {int(now - self.last_data_time)}s!")
                             print("   Possible causes:")
-                            print("   • Osmosdr connection lost")
+                            print("   • SDRplay Direct API streaming interrupted")
                             print("   • SDRPlay in use by another program")
                             print("   • No GPS signal (check antenna placement)")
                     else:

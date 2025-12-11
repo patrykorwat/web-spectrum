@@ -34,23 +34,43 @@ class GNSSControlHandler(BaseHTTPRequestHandler):
         if self.path == '/status':
             self._set_headers()
 
-            # Check if SDRplay Direct Mode streamer is running
-            direct_mode_active = False
-            direct_mode_info = ''
+            # Check if any GNSS-SDR is running
+            gnss_running = False
+            gnss_pids = []
             try:
-                result = subprocess.run(['pgrep', '-f', 'sdrplay_soapy_streamer'],
+                result = subprocess.run(['pgrep', '-f', 'gnss-sdr'],
                                       capture_output=True, text=True, timeout=1)
                 if result.returncode == 0:
-                    direct_mode_active = True
-                    direct_mode_info = 'SDRplay streamer is running continuously (Direct Mode)'
+                    gnss_running = True
+                    gnss_pids = result.stdout.strip().split('\n')
             except:
                 pass
 
+            # Check if SDRplay streamer is running
+            streamer_running = False
+            streamer_pids = []
+            try:
+                result = subprocess.run(['pgrep', '-f', 'sdrplay_fifo_streamer'],
+                                      capture_output=True, text=True, timeout=1)
+                if result.returncode == 0:
+                    streamer_running = True
+                    streamer_pids = result.stdout.strip().split('\n')
+            except:
+                pass
+
+            # Determine if pipeline is running
+            pipeline_running = gnss_running and streamer_running
+
             status = {
-                'running': GNSSControlHandler.gnss_process is not None and GNSSControlHandler.gnss_process.poll() is None,
+                'running': pipeline_running or (GNSSControlHandler.gnss_process is not None and GNSSControlHandler.gnss_process.poll() is None),
+                'gnss_pids': gnss_pids,
+                'streamer_pids': streamer_pids,
                 'pid': GNSSControlHandler.gnss_process_pid,
-                'directMode': direct_mode_active,
-                'directModeInfo': direct_mode_info
+                'pipeline_active': pipeline_running,
+                'message': 'GNSS pipeline is running' if pipeline_running else 'GNSS pipeline is not running',
+                # Add directMode fields that UI expects
+                'directMode': streamer_running,  # If streamer is running, we're in direct mode
+                'directModeInfo': 'SDRplay Direct API streaming' if streamer_running else ''
             }
             self.wfile.write(json.dumps(status).encode())
         else:
@@ -69,17 +89,39 @@ class GNSSControlHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'error': 'Not found'}).encode())
 
     def _handle_start(self):
-        # Check if already running
+        # First check if any GNSS-SDR process is already running
+        try:
+            result = subprocess.run(['pgrep', '-f', 'gnss-sdr'],
+                                  capture_output=True, text=True, timeout=1)
+            if result.returncode == 0:
+                # GNSS-SDR is already running
+                pids = result.stdout.strip().split('\n')
+                self._set_headers(200)
+                self.wfile.write(json.dumps({
+                    'status': 'already_running',
+                    'message': 'GNSS pipeline is already running',
+                    'pids': pids
+                }).encode())
+                print(f"[Control API] GNSS-SDR already running with PIDs: {pids}")
+                return
+        except:
+            pass
+
+        # Check if our tracked process is running
         if GNSSControlHandler.gnss_process is not None and GNSSControlHandler.gnss_process.poll() is None:
-            self._set_headers(400)
-            self.wfile.write(json.dumps({'error': 'GNSS collection already running', 'pid': GNSSControlHandler.gnss_process_pid}).encode())
+            self._set_headers(200)
+            self.wfile.write(json.dumps({
+                'status': 'already_running',
+                'pid': GNSSControlHandler.gnss_process_pid,
+                'message': 'GNSS collection already running'
+            }).encode())
             return
 
         # Start GNSS data collection
         try:
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            # Use file-based mode: record samples then process
-            start_script = os.path.join(script_dir, 'start_gnss_file.sh')
+            # Use FIFO-based real-time streaming mode for immediate results
+            start_script = os.path.join(script_dir, 'run_gnss.sh')
 
             # Start the process with proper environment
             env = os.environ.copy()

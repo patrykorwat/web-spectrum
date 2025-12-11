@@ -263,26 +263,42 @@ if __name__ == "__main__":
         return self.streamer_process.pid
 
     def start_gnss_sdr(self):
-        """Start GNSS-SDR process"""
+        """Start GNSS-SDR process with log parsing for UI updates"""
         env = os.environ.copy()
         env['DYLD_LIBRARY_PATH'] = '/usr/local/lib:' + env.get('DYLD_LIBRARY_PATH', '')
+        env['PYTHONUNBUFFERED'] = '1'  # Disable Python buffering
+
+        # Start GNSS-SDR with output piped through parse_gnss_logs.py
+        # Use tee to show output in terminal AND send to parse_gnss_logs
+        parse_logs_script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            'parse_gnss_logs.py'
+        )
+
+        cmd = f"gnss-sdr --config_file={self.config_path} 2>&1 | tee >(python3 -u {parse_logs_script})"
 
         self.gnss_process = subprocess.Popen(
-            ['gnss-sdr', '--config_file=' + self.config_path],
+            cmd,
+            shell=True,
+            executable='/bin/bash',  # Use bash for process substitution
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             universal_newlines=True,
-            bufsize=1
+            bufsize=1,
+            preexec_fn=os.setsid  # Create new process group
         )
 
-        # Read output in thread
+        # Read output in thread with immediate display
         def read_output():
-            for line in self.gnss_process.stdout:
-                if line.strip():
-                    # Filter out verbose messages
-                    if not any(skip in line for skip in ['Tracking_1C', 'Telemetry', 'dll_pll']):
-                        print(f"[GNSS-SDR] {line.strip()}")
+            try:
+                for line in self.gnss_process.stdout:
+                    if line:
+                        # Remove buffer/warning messages for cleaner output
+                        if 'buffer_double_mapped' not in line and 'allocate_buffer' not in line:
+                            print(f"[GNSS-SDR] {line.rstrip()}", flush=True)
+            except Exception as e:
+                print(f"[GNSS-SDR] Output thread error: {e}")
 
         threading.Thread(target=read_output, daemon=True).start()
         return self.gnss_process.pid
