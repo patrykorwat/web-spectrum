@@ -568,7 +568,8 @@ return (
                   <Box sx={{ marginTop: '10px', fontSize: '0.9em' }}>
                     {decodedItems[0].msg.satellites.slice(0, 8).map((sat: any, idx: number) => (
                       <Box key={idx} sx={{ marginBottom: '5px', paddingLeft: '20px' }}>
-                        • PRN {sat.prn}: C/N0 = {sat.cn0?.toFixed(1) || 'N/A'} dB-Hz,
+                        • PRN {sat.prn}: C/N0 = {sat.cn0?.toFixed(1) || 'N/A'} dB-Hz
+                        {sat.snr !== undefined && ` (SNR = ${sat.snr.toFixed(1)} dB)`},
                         Doppler = {sat.dopplerHz?.toFixed(0) || 'N/A'} Hz,
                         State = {sat.state || 'UNKNOWN'}
                       </Box>
@@ -871,8 +872,8 @@ return (
                   showMark: false
                 },
                 {
-                  data: satelliteHistory.slice().reverse().map(p => p.avgCN0 / 5), // Scale down to fit
-                  label: 'Avg C/N0 (/5)',
+                  data: satelliteHistory.slice().reverse().map(p => p.avgCN0),
+                  label: 'Avg C/N0 (dB-Hz)',
                   color: '#2196F3',
                   showMark: false
                 }
@@ -882,7 +883,7 @@ return (
                 label: 'Time (recent →)'
               }]}
               yAxis={[{
-                label: 'Count / C/N0 (scaled)'
+                label: 'Satellites / C/N0 (dB-Hz)'
               }]}
               slotProps={{
                 legend: {
