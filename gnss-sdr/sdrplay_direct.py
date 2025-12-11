@@ -699,9 +699,9 @@ class SDRplayDevice:
         rx_params.tunerParams.ifType = sdrplay_api_If_kHzT.IF_Zero  # Zero-IF like C example
         rx_params.tunerParams.loMode = sdrplay_api_LoModeT.Auto
 
-        # Set gain parameters
-        rx_params.tunerParams.gain.gRdB = 40  # 40 dB gain reduction
-        rx_params.tunerParams.gain.LNAstate = 5  # Mid-range LNA
+        # Set gain parameters - optimized for GPS reception
+        rx_params.tunerParams.gain.gRdB = 20  # 20 dB gain reduction (39 dB actual gain)
+        rx_params.tunerParams.gain.LNAstate = 3  # Higher LNA state for better sensitivity
         rx_params.tunerParams.gain.syncUpdate = 0
         rx_params.tunerParams.gain.minGr = sdrplay_api_MinGainReductionT.NORMAL_MIN_GR
 

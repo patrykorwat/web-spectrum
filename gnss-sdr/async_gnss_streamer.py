@@ -84,17 +84,36 @@ class AsyncGNSSStreamer:
                 is_jammed = False
                 jamming_type = 'NONE'
 
-                if cn0_std < 1.0 and len(cn0_values) > 4:
+                # Real GPS: std dev typically 3-8 dB (different elevations, distances)
+                # Spoofed GPS: std dev < 2.5 dB (single transmitter, uniform signals)
+                if cn0_std < 2.5 and len(cn0_values) > 4:
                     is_jammed = True
                     jamming_type = 'POSSIBLE_SPOOFING'
                 elif avg_cn0 < 35:
                     is_jammed = True
                     jamming_type = 'BROADBAND_JAMMING'
 
+                # Simulate position fix (need 4+ satellites)
+                position_fix = None
+                if len(satellites_list) >= 4:
+                    # Simulated position (example: San Francisco)
+                    position_fix = {
+                        'latitude': 37.7749 + random.uniform(-0.001, 0.001),  # SF with small drift
+                        'longitude': -122.4194 + random.uniform(-0.001, 0.001),
+                        'altitude': 10.0 + random.uniform(-5, 5),  # meters
+                        'accuracy': 5.0 + random.uniform(-2, 2),  # meters
+                        'numSatellites': len(satellites_list),
+                        'fixType': '3D',
+                        'hdop': 1.2,
+                        'vdop': 1.8,
+                        'pdop': 2.1
+                    }
+
                 # Build message
                 message = {
                     'protocol': 'GNSS_GPS_L1',
                     'satellites': satellites_list,
+                    'position': position_fix,  # Add position fix
                     'jamming': {
                         'isJammed': is_jammed,
                         'jammingType': jamming_type,
@@ -166,8 +185,13 @@ class AsyncGNSSStreamer:
 
         # Start WebSocket server
         print(f"[WebSocket] Starting server on port {self.websocket_port}...")
+
+        # Create wrapper to handle websockets library expectations
+        async def handler_wrapper(websocket):
+            await self.websocket_handler(websocket)
+
         server = await websockets.serve(
-            self.websocket_handler,
+            handler_wrapper,
             'localhost',
             self.websocket_port,
             ping_interval=None,

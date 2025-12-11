@@ -98,14 +98,8 @@ function SdrPlayDecoder() {
   const [progressTotal, setProgressTotal] = useState<number>(0);
   const [progressMessage, setProgressMessage] = useState<string>('');
 
-  // GNSS collection control
-  const [gnssCollectionRunning, setGnssCollectionRunning] = useState<boolean>(false);
-  const [gnssCollectionLoading, setGnssCollectionLoading] = useState<boolean>(false);
-  const [gnssCollectionError, setGnssCollectionError] = useState<string | null>(null);
-
-  // Direct mode status
-  const [directModeActive, setDirectModeActive] = useState<boolean>(false);
-  const [directModeInfo, setDirectModeInfo] = useState<string>('');
+  // Direct mode status (for async GNSS streaming)
+  const [directModeActive] = useState<boolean>(true); // Always true for new async mode
 
   const pointsBatch = 10000;
 
@@ -125,37 +119,6 @@ function SdrPlayDecoder() {
     }
   }, [bridgeMode, websocketReceiver]);
 
-  // Poll GNSS collection status every 2 seconds
-  useEffect(() => {
-    if (bridgeMode !== 'gnss-sdr') return;
-
-    const pollStatus = async () => {
-      try {
-        const response = await fetch('http://localhost:8767/status');
-        const data = await response.json();
-        setGnssCollectionRunning(data.running);
-        setGnssCollectionError(null);
-
-        // Check for direct mode information
-        if (data.directMode) {
-          setDirectModeActive(true);
-          setDirectModeInfo(data.directModeInfo || 'SDRplay streamer running continuously');
-        } else {
-          setDirectModeActive(false);
-          setDirectModeInfo('');
-        }
-      } catch (error) {
-        // Control API not running - that's okay
-        setGnssCollectionRunning(false);
-        setDirectModeActive(false);
-      }
-    };
-
-    pollStatus(); // Check immediately
-    const interval = setInterval(pollStatus, 2000); // Then every 2 seconds
-
-    return () => clearInterval(interval);
-  }, [bridgeMode]);
 
   const download = () => {
     let lines = 'decoded,time,msg'
@@ -166,66 +129,6 @@ function SdrPlayDecoder() {
     downloadFile(`spectrum-${new Date().toISOString()}.csv`, 'data:text/csv;charset=UTF-8,' + encodeURIComponent(lines));
   };
 
-  // GNSS Collection Control Functions
-  const handleStartGnssCollection = async () => {
-    setGnssCollectionLoading(true);
-    setGnssCollectionError(null);
-    try {
-      const response = await fetch('http://localhost:8767/start', { method: 'POST' });
-      const data = await response.json();
-      if (response.ok) {
-        setGnssCollectionRunning(true);
-        console.log('[GNSS Control] Started collection:', data);
-      } else {
-        setGnssCollectionError(data.error || 'Failed to start collection');
-      }
-    } catch (error) {
-      setGnssCollectionError('Control API not available. Run control_api.py first.');
-      console.error('[GNSS Control] Error starting collection:', error);
-    } finally {
-      setGnssCollectionLoading(false);
-    }
-  };
-
-  const handleStopGnssCollection = async () => {
-    setGnssCollectionLoading(true);
-    setGnssCollectionError(null);
-    try {
-      const response = await fetch('http://localhost:8767/stop', { method: 'POST' });
-      const data = await response.json();
-      if (response.ok) {
-        setGnssCollectionRunning(false);
-        console.log('[GNSS Control] Stopped collection:', data);
-      } else {
-        setGnssCollectionError(data.error || 'Failed to stop collection');
-      }
-    } catch (error) {
-      setGnssCollectionError('Control API not available');
-      console.error('[GNSS Control] Error stopping collection:', error);
-    } finally {
-      setGnssCollectionLoading(false);
-    }
-  };
-
-  const handleRestartGnssCollection = async () => {
-    setGnssCollectionLoading(true);
-    setGnssCollectionError(null);
-    try {
-      const response = await fetch('http://localhost:8767/restart', { method: 'POST' });
-      const data = await response.json();
-      if (response.ok) {
-        setGnssCollectionRunning(true);
-        console.log('[GNSS Control] Restarted collection:', data);
-      } else {
-        setGnssCollectionError(data.error || 'Failed to restart collection');
-      }
-    } catch (error) {
-      setGnssCollectionError('Control API not available. Run control_api.py first.');
-      console.error('[GNSS Control] Error restarting collection:', error);
-    } finally {
-      setGnssCollectionLoading(false);
-    }
-  };
 
 return (
   <Container maxWidth="lg">
@@ -433,13 +336,9 @@ return (
                 gnssDemodulator.setProtocol(protocol);
               }
 
-          // Create and connect WebSocket receiver with progress callback
-          const wsReceiver = new WebSocketReceiver(websocketUrl, sampleReceiver, (progress) => {
-            setProgressPhase(progress.phase);
-            setProgressPercent(progress.progress);
-            setProgressElapsed(progress.elapsed);
-            setProgressTotal(progress.total);
-            setProgressMessage(progress.message);
+          // Create and connect WebSocket receiver
+          const wsReceiver = new WebSocketReceiver(websocketUrl, sampleReceiver, () => {
+            // Progress callback - not used in async streaming mode
           });
           try {
             await wsReceiver.connect();
@@ -508,50 +407,6 @@ return (
       </Box>
     )}
 
-    {/* Collection Control Buttons - Only show in file mode (when direct mode is NOT active) */}
-    {bridgeMode === 'gnss-sdr' && !directModeActive && (
-      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(76, 175, 80, 0.08)', borderRadius: '8px', border: '1px solid rgba(76, 175, 80, 0.3)' }}>
-        <Typography variant="h6" sx={{ marginBottom: '15px', color: 'success.main' }}>
-          🎛️ Data Collection Control
-        </Typography>
-
-        <Box sx={{ marginBottom: '10px', display: 'flex', gap: 2, alignItems: 'center' }}>
-          <ButtonGroup variant="contained" size="medium">
-            <Button
-              disabled={gnssCollectionRunning || gnssCollectionLoading}
-              onClick={handleStartGnssCollection}
-              color="success"
-            >
-              {gnssCollectionLoading ? 'Starting...' : 'Start Collection'}
-            </Button>
-            <Button
-              disabled={!gnssCollectionRunning || gnssCollectionLoading}
-              onClick={handleStopGnssCollection}
-              color="error"
-            >
-              {gnssCollectionLoading ? 'Stopping...' : 'Stop Collection'}
-            </Button>
-            <Button
-              disabled={gnssCollectionLoading}
-              onClick={handleRestartGnssCollection}
-              color="warning"
-            >
-              {gnssCollectionLoading ? 'Restarting...' : 'Restart Collection'}
-            </Button>
-          </ButtonGroup>
-
-          <Typography variant="body1" sx={{ fontWeight: 'bold', color: gnssCollectionRunning ? 'success.main' : 'error.main' }}>
-            {gnssCollectionRunning ? '🟢 RUNNING' : '🔴 STOPPED'}
-          </Typography>
-        </Box>
-
-        {gnssCollectionError && (
-          <Typography variant="body2" sx={{ marginTop: '10px', color: 'error.main', padding: '8px', backgroundColor: 'rgba(255, 0, 0, 0.1)', borderRadius: '4px' }}>
-            ⚠️ Backend not available: {gnssCollectionError}
-          </Typography>
-        )}
-      </Box>
-    )}
 
     {/* Satellite Acquisition Status - Always show when connected in GNSS-SDR mode */}
     {bridgeMode === 'gnss-sdr' && websocketReceiver?.isConnected() && (
@@ -659,63 +514,6 @@ return (
       </Box>
     )}
 
-    {/* Progress Status - Show when collection is running in file mode */}
-    {bridgeMode === 'gnss-sdr' && gnssCollectionRunning && websocketReceiver?.isConnected() && (
-      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(33, 150, 243, 0.08)', borderRadius: '8px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
-        {progressPhase ? (
-          <>
-            <Typography variant="h6" sx={{ marginBottom: '10px', color: progressPhase === 'complete' ? 'success.main' : 'info.main' }}>
-              📊 Current Status: {progressPhase === 'recording' ? '📡 Recording' : progressPhase === 'processing' ? '🛰️ Processing' : progressPhase === 'complete' ? '✅ Complete' : '⏳ ' + progressPhase}
-            </Typography>
-
-            <Box sx={{ marginBottom: '10px' }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
-                  {progressMessage}
-                </Typography>
-                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
-                  {progressPercent}%
-                </Typography>
-              </Box>
-              <LinearProgress
-                variant="determinate"
-                value={progressPercent}
-                sx={{ height: '8px', borderRadius: '4px' }}
-              />
-            </Box>
-
-            <Box sx={{ display: 'flex', gap: 3, marginTop: '10px' }}>
-              <Typography variant="caption">
-                ⏱️ Elapsed: {Math.floor(progressElapsed / 60)}:{String(progressElapsed % 60).padStart(2, '0')}
-              </Typography>
-              {progressTotal > 0 && (
-                <>
-                  <Typography variant="caption">
-                    ⏳ Total: {Math.floor(progressTotal / 60)}:{String(progressTotal % 60).padStart(2, '0')}
-                  </Typography>
-                  <Typography variant="caption">
-                    🕐 Remaining: {Math.floor((progressTotal - progressElapsed) / 60)}:{String((progressTotal - progressElapsed) % 60).padStart(2, '0')}
-                  </Typography>
-                </>
-              )}
-            </Box>
-          </>
-        ) : (
-          <>
-            <Typography variant="h6" sx={{ marginBottom: '10px', color: 'info.main' }}>
-              ⏳ Collection Running
-            </Typography>
-            <Typography variant="body2" sx={{ marginBottom: '10px' }}>
-              Waiting for progress update from data collection process...
-            </Typography>
-            <LinearProgress sx={{ height: '8px', borderRadius: '4px' }} />
-            <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', fontStyle: 'italic' }}>
-              Progress updates arrive every ~10 seconds
-            </Typography>
-          </>
-        )}
-      </Box>
-    )}
 
     {/* Setup Instructions - Only show for GNSS-SDR mode when not connected */}
     {bridgeMode === 'gnss-sdr' && !websocketReceiver?.isConnected() && (

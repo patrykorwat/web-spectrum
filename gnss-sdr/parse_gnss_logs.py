@@ -10,6 +10,7 @@ import asyncio
 import websockets
 import sys
 import glob
+import statistics
 from datetime import datetime
 from collections import defaultdict
 
@@ -102,11 +103,14 @@ async def send_satellite_data(websocket_url='ws://localhost:8766'):
             if should_send and tracked_satellites:
                 # Build message in GNSS protocol format
                 satellites_list = []
+                cn0_values = []
                 for prn, info in tracked_satellites.items():
+                    cn0 = info.get('cn0', 35.0)
+                    cn0_values.append(cn0)
                     satellites_list.append({
                         'prn': prn,
-                        'cn0': info.get('cn0', 35.0),  # Default estimate
-                        'snr': info.get('cn0', 35.0) - 30,
+                        'cn0': cn0,
+                        'snr': cn0 - 30,
                         'dopplerHz': 0,  # Not available from logs
                         'state': 'TRACKING',
                         'carrierPhase': 0,
@@ -116,17 +120,31 @@ async def send_satellite_data(websocket_url='ws://localhost:8766'):
                         'subframeSync': False
                     })
 
+                # Spoofing detection based on C/N0 standard deviation
+                # Real GPS: std dev typically 3-8 dB (different satellite elevations/distances)
+                # Spoofed GPS: std dev < 2.5 dB (single transmitter, uniform signals)
+                is_jammed = False
+                jamming_type = 'NONE'
+                avg_cn0 = sum(cn0_values) / len(cn0_values) if cn0_values else 0
+
+                if len(cn0_values) > 4:
+                    cn0_std = statistics.stdev(cn0_values)
+                    if cn0_std < 2.5:
+                        is_jammed = True
+                        jamming_type = 'POSSIBLE_SPOOFING'
+
                 message = {
                     'protocol': 'GNSS_GPS_L1',
                     'satellites': satellites_list,
                     'jamming': {
-                        'isJammed': False,
-                        'jammingType': 'NONE',
+                        'isJammed': is_jammed,
+                        'jammingType': jamming_type,
                         'noiseFloorDb': -140,
-                        'avgCN0': sum(s['cn0'] for s in satellites_list) / len(satellites_list) if satellites_list else 0,
-                        'minCN0': min(s['cn0'] for s in satellites_list) if satellites_list else 0,
-                        'maxCN0': max(s['cn0'] for s in satellites_list) if satellites_list else 0,
-                        'numTracking': len(satellites_list)
+                        'avgCN0': avg_cn0,
+                        'minCN0': min(cn0_values) if cn0_values else 0,
+                        'maxCN0': max(cn0_values) if cn0_values else 0,
+                        'numTracking': len(satellites_list),
+                        'cn0StdDev': statistics.stdev(cn0_values) if len(cn0_values) > 1 else 0
                     },
                     'timestamp': int(datetime.now().timestamp() * 1000)
                 }

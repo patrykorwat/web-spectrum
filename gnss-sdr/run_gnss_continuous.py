@@ -60,16 +60,17 @@ Channels_1C.count=12
 Channels.in_acquisition=12
 Channel.signal=1C
 
-; Acquisition - More sensitive settings
+; Acquisition - Ultra-sensitive settings for weak signals
 Acquisition_1C.implementation=GPS_L1_CA_PCPS_Acquisition
 Acquisition_1C.item_type=gr_complex
 Acquisition_1C.coherent_integration_time_ms=1
-Acquisition_1C.pfa=0.01
+Acquisition_1C.pfa=0.0001
 Acquisition_1C.doppler_max=10000
-Acquisition_1C.doppler_step=250
-Acquisition_1C.threshold=0.005
+Acquisition_1C.doppler_step=500
+Acquisition_1C.threshold=0.002
 Acquisition_1C.blocking=false
 Acquisition_1C.dump=false
+Acquisition_1C.max_dwells=2
 
 ; Tracking - Optimized for stability
 Tracking_1C.implementation=GPS_L1_CA_DLL_PLL_Tracking

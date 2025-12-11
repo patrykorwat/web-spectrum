@@ -1,6 +1,6 @@
 #!/bin/bash
-# Pure Async GNSS Streamer - ZERO Blocking Operations
-# Uses simulated satellite data with realistic timing
+# REAL GNSS-SDR Pipeline with SDRplay Direct API
+# Processes actual GPS signals from SDRplay device
 
 set -e
 
@@ -13,7 +13,7 @@ export PYTHONPATH="/opt/homebrew/lib/python3.14/site-packages:$PYTHONPATH"
 export PYTHONUNBUFFERED=1
 
 echo "========================================================================"
-echo "Pure Async GNSS Streamer - ZERO Blocking"
+echo "REAL GNSS-SDR Pipeline - SDRplay Direct API"
 echo "========================================================================"
 echo ""
 
@@ -25,20 +25,27 @@ pkill -f "parse_gnss_logs" 2>/dev/null || true
 pkill -f "run_gnss_continuous" 2>/dev/null || true
 pkill -f "async_gnss_streamer" 2>/dev/null || true
 rm -f /tmp/gnss_fifo 2>/dev/null || true
+rm -f /tmp/gnss_continuous.conf 2>/dev/null || true
 sleep 2
 echo "✓ Cleanup complete"
 echo ""
 
-echo "⚠️  NOTE: Using simulated GNSS data with realistic satellite acquisition"
-echo "   Satellites will appear gradually (1 every 10 seconds)"
-echo "   This avoids ALL blocking I/O issues"
+echo "📡 Processing REAL GPS signals from SDRplay device"
+echo "   • SDRplay Direct API → FIFO → GNSS-SDR"
+echo "   • Sample rate: 2.048 MSPS"
+echo "   • Frequency: 1575.42 MHz (GPS L1)"
 echo ""
 
 # Cleanup handler
 cleanup() {
     echo ""
     echo "🛑 Shutting down..."
-    pkill -f "async_gnss_streamer" 2>/dev/null || true
+    pkill -f "gnss-sdr" 2>/dev/null || true
+    pkill -f "sdrplay_fifo" 2>/dev/null || true
+    pkill -f "run_gnss_continuous" 2>/dev/null || true
+    pkill -f "parse_gnss_logs" 2>/dev/null || true
+    rm -f /tmp/gnss_fifo 2>/dev/null || true
+    rm -f /tmp/gnss_continuous.conf 2>/dev/null || true
     echo "✓ Cleanup complete"
     exit 0
 }
@@ -46,12 +53,12 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 echo "========================================================================"
-echo "Starting Pure Async GNSS Streamer (port 8766)"
+echo "Starting REAL GNSS-SDR Processing"
 echo "========================================================================"
 echo ""
 
-# Run the async GNSS streamer
-python3 -u "${SCRIPT_DIR}/async_gnss_streamer.py"
+# Run the continuous GNSS pipeline with REAL SDRplay data
+python3 -u "${SCRIPT_DIR}/run_gnss_continuous.py"
 
 echo ""
 echo "✅ GNSS Streamer stopped"
