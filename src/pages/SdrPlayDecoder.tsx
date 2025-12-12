@@ -98,8 +98,15 @@ function SdrPlayDecoder() {
   const [progressTotal, setProgressTotal] = useState<number>(0);
   const [progressMessage, setProgressMessage] = useState<string>('');
 
-  // Direct mode status (for async GNSS streaming)
-  const [directModeActive] = useState<boolean>(true); // Always true for new async mode
+  // File-based recording control
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [recordingFile, setRecordingFile] = useState<string>('');
+
+  // Recording configuration from server
+  const [recordingConfig, setRecordingConfig] = useState<any>(null);
+  const [deviceInfo, setDeviceInfo] = useState<any>(null);
+  const [selectedPort, setSelectedPort] = useState<number>(2); // Default to Port 2
 
   const pointsBatch = 10000;
 
@@ -110,6 +117,40 @@ function SdrPlayDecoder() {
 
   const ismDemodulator = new IsmDemodulator();
   const [gnssDemodulator] = useState(() => new GNSSDemodulator());
+
+  // Fetch recording configuration and device info from server on mount
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const response = await fetch('http://localhost:3001/gnss/config');
+        if (response.ok) {
+          const config = await response.json();
+          setRecordingConfig(config);
+          // Initialize selected port from config
+          if (config.tuner) {
+            setSelectedPort(config.tuner);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch recording config:', error);
+      }
+    };
+
+    const fetchDeviceInfo = async () => {
+      try {
+        const response = await fetch('http://localhost:3001/gnss/device-info');
+        if (response.ok) {
+          const info = await response.json();
+          setDeviceInfo(info);
+        }
+      } catch (error) {
+        console.error('Failed to fetch device info:', error);
+      }
+    };
+
+    fetchConfig();
+    fetchDeviceInfo();
+  }, []);
 
   // Update WebSocket URL when bridge mode changes
   useEffect(() => {
@@ -127,6 +168,117 @@ function SdrPlayDecoder() {
       lines += '\n';
     }
     downloadFile(`spectrum-${new Date().toISOString()}.csv`, 'data:text/csv;charset=UTF-8,' + encodeURIComponent(lines));
+  };
+
+  // File-based GPS recording controls
+  const startRecording = async () => {
+    try {
+      setIsRecording(true);
+      setProgressPhase('recording');
+      setProgressPercent(0);
+      setProgressMessage('Starting GPS data recording...');
+
+      const response = await fetch('http://localhost:3001/gnss/start-recording', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          duration: 300, // 5 minutes
+          tuner: selectedPort // Pass selected port to backend
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to start recording');
+      const data = await response.json();
+      setRecordingFile(data.filename || '');
+      setProgressMessage('Recording GPS data (5 minutes)...');
+
+      // Auto-stop after 5 minutes and notify user
+      setTimeout(() => {
+        setIsRecording(false);
+        setProgressPhase('');
+        setProgressMessage(`✅ Recording complete! File: ${data.filename}. Click "Process & Get Position" to analyze.`);
+      }, 305000); // 5 minutes + 5 seconds buffer
+    } catch (error) {
+      console.error('Recording error:', error);
+      setIsRecording(false);
+      setProgressMessage(`Error: ${error}`);
+    }
+  };
+
+  const stopRecording = async () => {
+    try {
+      await fetch('http://localhost:3001/gnss/stop-recording', { method: 'POST' });
+      setIsRecording(false);
+      setProgressPhase('');
+      setProgressMessage('Recording stopped');
+    } catch (error) {
+      console.error('Stop recording error:', error);
+    }
+  };
+
+  const processRecording = async () => {
+    if (!recordingFile) {
+      alert('No recording file available. Please record data first.');
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      setProgressPhase('processing');
+      setProgressPercent(0);
+      setProgressMessage('Starting GNSS-SDR processing...');
+
+      const response = await fetch('http://localhost:3001/gnss/process-recording', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: recordingFile })
+      });
+
+      if (!response.ok) throw new Error('Failed to start processing');
+
+      // Poll for status updates every 2 seconds
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusResponse = await fetch('http://localhost:3001/gnss/status');
+          if (statusResponse.ok) {
+            const status = await statusResponse.json();
+
+            if (status.processing.active) {
+              // Still processing - update status
+              const duration = status.processing.duration;
+              const minutes = Math.floor(duration / 60);
+              const seconds = duration % 60;
+              setProgressMessage(
+                `Processing: ${minutes}m ${seconds}s elapsed... ${status.processing.status || 'Running GNSS-SDR'}`
+              );
+            } else {
+              // Processing complete
+              clearInterval(pollInterval);
+              setIsProcessing(false);
+              setProgressPhase('');
+              setProgressMessage('✅ Processing complete! Check for output files or satellite data above.');
+            }
+          }
+        } catch (pollError) {
+          console.error('Status poll error:', pollError);
+        }
+      }, 2000);
+
+      // Safety timeout - stop polling after 30 minutes
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        if (isProcessing) {
+          setIsProcessing(false);
+          setProgressPhase('');
+          setProgressMessage('⚠️ Processing timeout - check logs');
+        }
+      }, 1800000);
+
+    } catch (error) {
+      console.error('Processing error:', error);
+      setIsProcessing(false);
+      setProgressMessage(`Error: ${error}`);
+    }
   };
 
 
@@ -388,188 +540,196 @@ return (
       </Box>
     </Box>
 
-    {/* Direct Mode Status Banner - Show when streamer is running */}
-    {bridgeMode === 'gnss-sdr' && directModeActive && (
-      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(33, 150, 243, 0.12)', borderRadius: '8px', border: '2px solid rgba(33, 150, 243, 0.5)' }}>
-        <Typography variant="h6" sx={{ marginBottom: '10px', color: 'info.main', display: 'flex', alignItems: 'center', gap: 1 }}>
-          🚀 Direct SDRplay Mode Active
-        </Typography>
-        <Typography variant="body2" sx={{ marginBottom: '10px' }}>
-          ✅ SDRplay streamer is running continuously in the background<br />
-          ✅ Data is being captured at 2.05 MSPS (~16 MB/sec)<br />
-          ✅ File: /tmp/gps_iq_samples.dat
-        </Typography>
-        <Typography variant="caption" sx={{ display: 'block', padding: '10px', backgroundColor: 'rgba(255, 152, 0, 0.15)', borderRadius: '4px', border: '1px solid rgba(255, 152, 0, 0.4)' }}>
-          ℹ️ <strong>Important:</strong> In direct mode, you don't need to click "Start Collection"!<br />
-          The SDRplay streamer is already capturing data continuously.<br />
-          <strong>Just click "Listen & Decode"</strong> above, then wait 1-3 minutes for satellite acquisition.
-        </Typography>
-      </Box>
-    )}
 
 
-    {/* Satellite Acquisition Status - Always show when connected in GNSS-SDR mode */}
-    {bridgeMode === 'gnss-sdr' && websocketReceiver?.isConnected() && (
-      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(76, 175, 80, 0.08)', borderRadius: '8px', border: '1px solid rgba(76, 175, 80, 0.3)' }}>
-        <Typography variant="h6" sx={{ marginBottom: '10px', color: 'success.main' }}>
-          🛰️ Satellite Acquisition Status
+    {/* GPS Recording Control - File-based approach */}
+    {bridgeMode === 'gnss-sdr' && (
+      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(156, 39, 176, 0.08)', borderRadius: '8px', border: '1px solid rgba(156, 39, 176, 0.3)' }}>
+        <Typography variant="h6" sx={{ marginBottom: '15px', color: 'secondary.main' }}>
+          🎙️ GPS Recording & Position Fix
         </Typography>
-        <Box>
-          <Typography variant="body1" sx={{ marginBottom: '5px' }}>
-            {decodedItems.length > 0 && decodedItems[0].msg?.satellites ? (
-              <>
-                <strong>Satellites Tracking:</strong> {decodedItems[0].msg.satellites.length} satellite(s)
-                {decodedItems[0].msg.satellites.length > 0 && (
-                  <Box sx={{ marginTop: '10px', fontSize: '0.9em' }}>
-                    {decodedItems[0].msg.satellites.slice(0, 8).map((sat: any, idx: number) => (
-                      <Box key={idx} sx={{ marginBottom: '5px', paddingLeft: '20px' }}>
-                        • PRN {sat.prn}: C/N0 = {sat.cn0?.toFixed(1) || 'N/A'} dB-Hz
-                        {sat.snr !== undefined && ` (SNR = ${sat.snr.toFixed(1)} dB)`},
-                        Doppler = {sat.dopplerHz?.toFixed(0) || 'N/A'} Hz,
-                        State = {sat.state || 'UNKNOWN'}
-                      </Box>
-                    ))}
-                    {decodedItems[0].msg.satellites.length > 8 && (
-                      <Box sx={{ paddingLeft: '20px', fontStyle: 'italic', color: 'text.secondary' }}>
-                        ... and {decodedItems[0].msg.satellites.length - 8} more
-                      </Box>
-                    )}
-                  </Box>
-                )}
-              </>
-            ) : (
-              <>
-                <strong>Status:</strong> Acquiring satellites... (this may take 1-3 minutes)
-                <br />
-                <Typography variant="caption" color="text.secondary">
-                  GNSS-SDR is processing signals. Satellite data will appear once acquisition completes.
-                </Typography>
-              </>
-            )}
-          </Typography>
 
-          {/* Jamming/Spoofing Detection Info */}
-          {decodedItems.length > 0 && decodedItems[0].msg?.jamming && (
-            <Box sx={{ marginTop: '10px', padding: '10px', backgroundColor: decodedItems[0].msg.jamming.isJammed ? 'rgba(244, 67, 54, 0.1)' : 'rgba(76, 175, 80, 0.1)', borderRadius: '4px' }}>
-              <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.isJammed ? 'error.main' : 'success.main', fontWeight: 'bold' }}>
-                {decodedItems[0].msg.jamming.isJammed ? '⚠️ Signal Anomaly Detected' : '✓ Signal Quality Normal'}
-              </Typography>
-              {decodedItems[0].msg.jamming.isJammed && (
-                <Box sx={{ marginTop: '8px', fontSize: '0.85em' }}>
-                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
-                    <strong>Type:</strong> {decodedItems[0].msg.jamming.jammingType.replace(/_/g, ' ')}
-                    {(decodedItems[0].msg.jamming.jammingType.includes('SPOOFING') ||
-                      decodedItems[0].msg.jamming.jammingType === 'MATCHED_POWER_ATTACK') && ' 🚨'}
-                  </Typography>
-                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
-                    <strong>Severity:</strong> {decodedItems[0].msg.jamming.jammingSeverity || 'UNKNOWN'}
-                    {' '}(Confidence: {(decodedItems[0].msg.jamming.jammerConfidence * 100).toFixed(0)}%)
-                  </Typography>
-                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
-                    <strong>Detection Method:</strong> {(decodedItems[0].msg.jamming.detectionMethod || 'UNKNOWN').replace(/_/g, ' ')}
-                  </Typography>
-                  <Typography variant="body2" sx={{ color: 'text.primary' }}>
-                    <strong>Avg C/N0:</strong> {decodedItems[0].msg.jamming.avgCN0.toFixed(1)} dB-Hz
-                    {' '}(Variation: ±{decodedItems[0].msg.jamming.cn0Variation?.toFixed(1) || '0.0'} dB)
-                  </Typography>
-                  {decodedItems[0].msg.jamming.cn0StdDev && (
-                    <Typography variant="body2" sx={{ color: 'text.primary' }}>
-                      <strong>Multi-Satellite Analysis:</strong> Std Dev = {decodedItems[0].msg.jamming.cn0StdDev.toFixed(1)} dB
-                      {' '}(Range: {decodedItems[0].msg.jamming.minCN0.toFixed(1)} - {decodedItems[0].msg.jamming.maxCN0.toFixed(1)} dB-Hz)
-                    </Typography>
-                  )}
-                  {decodedItems[0].msg.jamming.cn0Correlation !== undefined && (
-                    <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.cn0Correlation > 0.95 ? 'error.main' : 'text.primary' }}>
-                      <strong>C/N0 Correlation:</strong> {(decodedItems[0].msg.jamming.cn0Correlation * 100).toFixed(1)}%
-                      {decodedItems[0].msg.jamming.cn0Correlation > 0.95 && ' ⚠️ High correlation - spoofing indicator!'}
-                    </Typography>
-                  )}
-                  {decodedItems[0].msg.jamming.dopplerVariation !== undefined && (
-                    <Typography variant="body2" sx={{ color: decodedItems[0].msg.jamming.dopplerVariation < 20 ? 'warning.main' : 'text.primary' }}>
-                      <strong>Doppler Analysis:</strong> Variation = {decodedItems[0].msg.jamming.dopplerVariation.toFixed(1)} Hz
-                      {decodedItems[0].msg.jamming.dopplerVariation < 20 && ' ⚠️ Low variation - possible spoofing!'}
-                    </Typography>
-                  )}
-                  {decodedItems[0].msg.jamming.jammingType === 'HIGH_CONFIDENCE_SPOOFING' && (
-                    <Typography variant="caption" sx={{ display: 'block', marginTop: '8px', color: 'error.main', fontWeight: 'bold', fontStyle: 'italic' }}>
-                      🚨 HIGH CONFIDENCE SPOOFING DETECTED! Multiple indicators confirm attack. DO NOT TRUST POSITION DATA.
-                    </Typography>
-                  )}
-                  {(decodedItems[0].msg.jamming.jammingType === 'POSSIBLE_SPOOFING' ||
-                    decodedItems[0].msg.jamming.jammingType === 'SUSPECTED_SPOOFING_LOW_DOPPLER') && (
-                    <Typography variant="caption" sx={{ display: 'block', marginTop: '8px', color: 'warning.main', fontStyle: 'italic' }}>
-                      ⚠️ Spoofing indicators detected. Verify position accuracy with alternative sources.
+        <Typography variant="body2" sx={{ marginBottom: '15px', color: 'text.secondary' }}>
+          Record GPS data to file, then process offline for reliable position fix.
+          <br />
+          <strong>No FIFO blocking!</strong> This approach records 5 minutes of IQ data, then processes it with GNSS-SDR.
+        </Typography>
+
+        {/* Device Info - if any SDRplay device detected */}
+        {deviceInfo && deviceInfo.devices && deviceInfo.devices.length > 0 && (
+          <Box sx={{ marginBottom: '15px', padding: '12px', backgroundColor: 'rgba(33, 150, 243, 0.1)', borderRadius: '4px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
+            <Typography variant="subtitle2" sx={{ marginBottom: '8px', fontWeight: 'bold', color: 'info.main' }}>
+              📡 Detected Device
+            </Typography>
+            <Typography variant="body2">
+              <strong>Model:</strong> {deviceInfo.devices[0].model} (Serial: {deviceInfo.devices[0].serial})
+              <br />
+
+              {/* RSPduo and RSP2: Show port selection (RSPduo can be detected as RSP2) */}
+              {(deviceInfo.devices[0].is_rspduo || deviceInfo.devices[0].model === 'RSP2') && (
+                <Box sx={{ marginTop: '12px', marginBottom: '8px' }}>
+                  <MuiFormControl component="fieldset">
+                    <FormLabel component="legend" sx={{ fontSize: '0.875rem', marginBottom: '6px' }}>
+                      <strong>🎯 Antenna Port Selection:</strong>
+                    </FormLabel>
+                    <RadioGroup
+                      row
+                      value={selectedPort}
+                      onChange={(e) => setSelectedPort(parseInt(e.target.value))}
+                    >
+                      <FormControlLabel
+                        value={1}
+                        control={<Radio size="small" />}
+                        label="Port 1 (Antenna A)"
+                        disabled={isRecording || isProcessing}
+                      />
+                      <FormControlLabel
+                        value={2}
+                        control={<Radio size="small" />}
+                        label="Port 2 (Antenna B)"
+                        disabled={isRecording || isProcessing}
+                      />
+                    </RadioGroup>
+                  </MuiFormControl>
+                  {recordingConfig && (
+                    <Typography variant="caption" color="success.main" display="block" sx={{ marginTop: '4px' }}>
+                      ✓ Bias-T {recordingConfig.bias_tee}, Gain {recordingConfig.actual_gain} dB
                     </Typography>
                   )}
                 </Box>
               )}
-              {!decodedItems[0].msg.jamming.isJammed && (
-                <Typography variant="body2" sx={{ marginTop: '5px', fontSize: '0.85em', color: 'text.secondary' }}>
-                  Avg C/N0: {decodedItems[0].msg.jamming.avgCN0.toFixed(1)} dB-Hz | {decodedItems[0].msg.jamming.numTracking} satellites tracked
-                </Typography>
+
+              {/* Other devices: Show settings info only */}
+              {!deviceInfo.devices[0].is_rspduo && deviceInfo.devices[0].model !== 'RSP2' && recordingConfig && (
+                <>
+                  <strong>🎯 Settings:</strong> Bias-T {recordingConfig.bias_tee}, Gain {recordingConfig.actual_gain} dB
+                  <br />
+                  <Typography variant="caption" color="success.main">
+                    ✓ Device configured for GPS reception
+                  </Typography>
+                </>
               )}
+            </Typography>
+          </Box>
+        )}
+
+        {/* Show info if no RSPduo or device detection failed */}
+        {deviceInfo && (!deviceInfo.devices || deviceInfo.devices.length === 0) && recordingConfig && (
+          <Box sx={{ marginBottom: '15px', padding: '12px', backgroundColor: 'rgba(255, 152, 0, 0.1)', borderRadius: '4px', border: '1px solid rgba(255, 152, 0, 0.3)' }}>
+            <Typography variant="body2" color="warning.main">
+              ⚠️ SDRplay device not detected (may be in use)
+              <br />
+              <Typography variant="caption" color="text.secondary">
+                Configured for: RSPduo Tuner {recordingConfig.tuner} with Bias-T {recordingConfig.bias_tee}
+              </Typography>
+            </Typography>
+          </Box>
+        )}
+
+        {/* Configuration Info - Dynamic from server */}
+        {recordingConfig ? (
+          <Box sx={{ marginBottom: '15px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.15)', borderRadius: '4px', border: '1px solid rgba(156, 39, 176, 0.2)' }}>
+            <Typography variant="subtitle2" sx={{ marginBottom: '8px', fontWeight: 'bold', color: 'secondary.main' }}>
+              📋 Recording Configuration
+            </Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.875rem' }}>
+              <Box>
+                <strong>Frequency:</strong> {recordingConfig.frequency_mhz} MHz (GPS L1)
+              </Box>
+              <Box>
+                <strong>Sample Rate:</strong> {recordingConfig.sample_rate_msps} MSPS
+              </Box>
+              <Box>
+                <strong>Gain:</strong> {recordingConfig.actual_gain} dB ({recordingConfig.gain_reduction} dB reduction)
+              </Box>
+              <Box>
+                <strong>Bandwidth:</strong> {recordingConfig.bandwidth_mhz} MHz
+              </Box>
+              <Box>
+                <strong>Format:</strong> {recordingConfig.format}
+              </Box>
+              <Box>
+                <strong>RSPduo Tuner:</strong> {recordingConfig.tuner} (Port {recordingConfig.tuner})
+              </Box>
+              <Box>
+                <strong>Bias-T:</strong> {recordingConfig.bias_tee || 'DISABLED'}
+              </Box>
+              <Box>
+                <strong>File Size:</strong> ~{recordingConfig.file_size_per_min_mb} MB/min
+              </Box>
+              <Box>
+                <strong>Duration:</strong> {recordingConfig.duration_default / 60} minutes (default)
+              </Box>
+              <Box>
+                <strong>Expected Size:</strong> ~{recordingConfig.expected_size_5min_gb} GB
+              </Box>
             </Box>
-          )}
-        </Box>
-      </Box>
-    )}
-
-
-    {/* Setup Instructions - Only show for GNSS-SDR mode when not connected */}
-    {bridgeMode === 'gnss-sdr' && !websocketReceiver?.isConnected() && (
-      <Box sx={{ marginBottom: '20px', padding: '20px', backgroundColor: 'rgba(33, 150, 243, 0.08)', borderRadius: '8px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
-        <Typography variant="h6" sx={{ marginBottom: '15px', color: 'info.main' }}>
-          📡 Setup Instructions
-        </Typography>
-
-        <Typography variant="body2" sx={{ display: 'block', marginBottom: '15px', padding: '15px', backgroundColor: 'rgba(76, 175, 80, 0.1)', borderRadius: '4px', border: '1px solid rgba(76, 175, 80, 0.3)' }}>
-          <strong>🚀 Setup (one time):</strong><br />
-          <Box component="span" sx={{ display: 'block', fontFamily: 'monospace', backgroundColor: 'rgba(0,0,0,0.3)', padding: '10px', borderRadius: '4px', marginTop: '10px', fontSize: '1.1em' }}>
-            ./start_all.sh direct
           </Box>
-          <span style={{ fontSize: '0.95em', display: 'block', marginTop: '10px' }}>
-            This starts everything in <strong>Direct SDRplay Mode</strong>: SDRplay streamer, GNSS-SDR, Control API, and GNSS Bridge.
-          </span>
-        </Typography>
-
-        <Typography variant="body2" sx={{ display: 'block', marginBottom: '15px', padding: '15px', backgroundColor: 'rgba(33, 150, 243, 0.1)', borderRadius: '4px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
-          <strong>📡 Usage (every time):</strong><br />
-          <Box component="ol" sx={{ marginTop: '10px', paddingLeft: '20px', '& li': { marginBottom: '8px' } }}>
-            <li><strong>Step 1:</strong> Click <strong>"Listen&Decode"</strong> (above) to connect to the bridge</li>
-            <li><strong>Step 2:</strong> Wait 1-3 minutes for satellite acquisition (GPS cold start)</li>
-            <li><strong>Step 3:</strong> Satellites and jamming/spoofing info will appear automatically!</li>
+        ) : (
+          <Box sx={{ marginBottom: '15px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.15)', borderRadius: '4px', border: '1px solid rgba(156, 39, 176, 0.2)' }}>
+            <Typography variant="body2" color="text.secondary">Loading configuration...</Typography>
           </Box>
-        </Typography>
-        <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', color: 'info.main', fontStyle: 'italic' }}>
-          ℹ️ In direct mode, data is captured continuously. No need to click "Start Collection"!
-        </Typography>
+        )}
 
-        {/* Processing Timeline */}
-        <Box sx={{ marginTop: '15px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.3)', borderRadius: '4px' }}>
-          <Typography variant="caption" sx={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>
-            📊 Processing Timeline (First Cycle):
+        {/* Recording Controls */}
+        <ButtonGroup variant="contained" sx={{ marginBottom: '10px' }}>
+          <Button
+            onClick={startRecording}
+            disabled={isRecording || isProcessing}
+            color="error"
+            sx={{ textTransform: 'none' }}
+          >
+            ⏺ Start Recording (5 min)
+          </Button>
+          <Button
+            onClick={stopRecording}
+            disabled={!isRecording}
+            sx={{ textTransform: 'none' }}
+          >
+            ⏹ Stop
+          </Button>
+          <Button
+            onClick={processRecording}
+            disabled={isRecording || isProcessing || !recordingFile}
+            color="success"
+            sx={{ textTransform: 'none' }}
+          >
+            🔄 Process & Get Position
+          </Button>
+        </ButtonGroup>
+
+        {/* Progress Display */}
+        {(progressPhase === 'recording' || progressPhase === 'processing') && (
+          <Box sx={{ marginTop: '15px' }}>
+            <LinearProgress
+              variant={progressPercent > 0 ? 'determinate' : 'indeterminate'}
+              value={progressPercent}
+              sx={{ marginBottom: '10px' }}
+            />
+            <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+              {progressMessage}
+              {progressElapsed > 0 && ` (${Math.floor(progressElapsed)}s elapsed)`}
+            </Typography>
+            {recordingFile && (
+              <Typography variant="caption" sx={{ display: 'block', marginTop: '5px', fontFamily: 'monospace', color: 'text.secondary' }}>
+                File: {recordingFile}
+              </Typography>
+            )}
+          </Box>
+        )}
+
+        {/* Status Message */}
+        {!isRecording && !isProcessing && recordingFile && (
+          <Typography variant="body2" sx={{ marginTop: '10px', color: 'success.main' }}>
+            ✅ Recording ready: {recordingFile}
+            <br />
+            Click "Process & Get Position" to calculate location.
           </Typography>
-          <Box sx={{ paddingLeft: '10px', fontSize: '0.85em' }}>
-            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
-              <span style={{ color: '#4CAF50' }}>⏱️ Min 0-5:</span> 📡 Recording GPS samples (5 minutes)
-            </Typography>
-            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
-              <span style={{ color: '#2196F3' }}>⏱️ Min 5-6:</span> 🛰️  Satellite acquisition (tracking starts)
-            </Typography>
-            <Typography variant="caption" component="div" sx={{ marginBottom: '3px' }}>
-              <span style={{ color: '#FF9800' }}>⏱️ Min 6-8:</span> 📖 Ephemeris decoding (navigation data)
-            </Typography>
-            <Typography variant="caption" component="div" sx={{ color: '#4CAF50', fontWeight: 'bold' }}>
-              <span>⏱️ Min 8-10:</span> 📍 First position fix! → ✅ DATA APPEARS HERE!
-            </Typography>
-          </Box>
-        </Box>
-
-        <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', color: 'warning.main' }}>
-          ⚠️ Make sure your GPS antenna has a clear sky view!
-        </Typography>
+        )}
       </Box>
     )}
+
+
 
     {/* Satellite Acquisition Info - Only show for GNSS-SDR mode when connected */}
     {bridgeMode === 'gnss-sdr' && websocketReceiver?.isConnected() && (

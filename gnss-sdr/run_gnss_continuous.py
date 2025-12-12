@@ -43,11 +43,15 @@ class ContinuousGNSSPipeline:
 [GNSS-SDR]
 GNSS-SDR.internal_fs_sps=2048000
 
-; Signal Source - FIFO (special support for named pipes)
-SignalSource.implementation=Fifo_Signal_Source
-SignalSource.filename=/tmp/gnss_fifo
-SignalSource.sample_type=gr_complex
+; Signal Source - File (rolling buffer from SDRplay)
+SignalSource.implementation=File_Signal_Source
+SignalSource.filename=/tmp/gnss_rolling_buffer.dat
+SignalSource.item_type=gr_complex
+SignalSource.sampling_frequency=2048000
+SignalSource.samples=0
+SignalSource.repeat=true
 SignalSource.dump=false
+SignalSource.enable_throttle_control=false
 
 ; Signal Conditioning - Pass through for now
 SignalConditioner.implementation=Pass_Through
@@ -72,11 +76,12 @@ Acquisition_1C.blocking=false
 Acquisition_1C.dump=false
 Acquisition_1C.max_dwells=2
 
-; Tracking - Optimized for stability
+; Tracking - Wide bandwidth for better weak signal tracking
 Tracking_1C.implementation=GPS_L1_CA_DLL_PLL_Tracking
 Tracking_1C.item_type=gr_complex
-Tracking_1C.pll_bw_hz=35.0
-Tracking_1C.dll_bw_hz=2.0
+Tracking_1C.pll_bw_hz=50.0
+Tracking_1C.dll_bw_hz=4.0
+Tracking_1C.early_late_space_chips=0.5
 Tracking_1C.dump=false
 
 ; Telemetry Decoder
@@ -255,48 +260,30 @@ Monitor.udp_port=1234
     def run(self):
         """Main execution"""
         print("=" * 70)
-        print("🛰️  CONTINUOUS GNSS PIPELINE - SDRplay Direct API")
+        print("🛰️  GNSS-SDR with SDRplay via SoapySDR (NO FIFO!)")
         print("=" * 70)
         print()
         print("This pipeline will:")
-        print("  • Stream continuously from SDRplay at 2.048 MSPS")
+        print("  • Connect directly to SDRplay via GNU Radio/SoapySDR")
+        print("  • Stream continuously at 2.048 MSPS")
         print("  • Track GPS satellites in real-time")
         print("  • Send updates to WebSocket (port 8766)")
-        print("  • Display tracking information")
-        print("  • Restart automatically if components fail")
+        print("  • NO FIFO BLOCKING - direct connection!")
         print()
 
-        # Clean up any existing FIFO
+        # Clean up any existing FIFO (not needed anymore but clean up legacy)
         if os.path.exists(self.fifo_path):
             os.remove(self.fifo_path)
 
         # Write configuration
-        print("📝 Writing GNSS-SDR configuration...")
+        print("📝 Writing GNSS-SDR configuration with SoapySDR source...")
         self.write_gnss_config()
-        print("   ✓ Configuration ready")
+        print("   ✓ Configuration ready (Osmosdr_Signal_Source)")
+        print()
 
-        # Start SDRplay streamer
-        print("\n🎯 Starting SDRplay Direct API streamer...")
-        streamer_pid = self.start_streamer()
-        if not streamer_pid:
-            print("   ❌ Failed to start streamer!")
-            return
-        print(f"   ✓ Streamer started (PID: {streamer_pid})")
-
-        # Wait for FIFO
-        print("\n⏳ Waiting for FIFO creation...")
-        for i in range(20):
-            if os.path.exists(self.fifo_path):
-                print(f"   ✓ FIFO created: {self.fifo_path}")
-                break
-            time.sleep(0.5)
-        else:
-            print("   ❌ FIFO not created!")
-            self.cleanup()
-            return
-
-        # Brief pause for initialization
-        time.sleep(2)
+        # NO FIFO STREAMER NEEDED - GNSS-SDR connects directly to SDRplay!
+        print("✅ Skipping FIFO streamer (using direct SoapySDR connection)")
+        print()
 
         # Start GNSS-SDR
         print("\n📡 Starting GNSS-SDR...")

@@ -699,11 +699,25 @@ class SDRplayDevice:
         rx_params.tunerParams.ifType = sdrplay_api_If_kHzT.IF_Zero  # Zero-IF like C example
         rx_params.tunerParams.loMode = sdrplay_api_LoModeT.Auto
 
-        # Set gain parameters - optimized for GPS reception
-        rx_params.tunerParams.gain.gRdB = 20  # 20 dB gain reduction (39 dB actual gain)
-        rx_params.tunerParams.gain.LNAstate = 3  # Higher LNA state for better sensitivity
+        # Set gain parameters - High gain for GPS reception (balanced for sensitivity and stability)
+        rx_params.tunerParams.gain.gRdB = 30  # 30 dB gain reduction (29 dB actual gain, balanced)
+        rx_params.tunerParams.gain.LNAstate = 4  # Higher LNA state for better sensitivity
         rx_params.tunerParams.gain.syncUpdate = 0
         rx_params.tunerParams.gain.minGr = sdrplay_api_MinGainReductionT.NORMAL_MIN_GR
+
+        # Enable Bias-T for active GPS antenna on ALL device types
+        # CRITICAL: Active GPS antennas need power through the coax!
+        rx_params.rsp1aTunerParams.biasTEnable = 1  # RSP1A
+
+        # RSP2: Enable Bias-T AND select Antenna B (Port 2)
+        # Antenna A=5 (Port 1: 10kHz-2GHz), Antenna B=6 (Port 2: 60MHz-2GHz)
+        # Based on SDRplay API: sdrplay_api_Rsp2_ANTENNA_A = 5, sdrplay_api_Rsp2_ANTENNA_B = 6
+        rx_params.rsp2TunerParams.biasTEnable = 1   # RSP2 Bias-T
+        rx_params.rsp2TunerParams.antennaSel = 6    # RSP2 Antenna B (Port 2)
+
+        rx_params.rspDuoTunerParams.biasTEnable = 1  # RSPduo
+        print("✓ Bias-T ENABLED for active antenna power (all device types)")
+        print("✓ RSP2: Antenna B (Port 2) selected with Bias-T")
 
         # Configure DC offset
         rx_params.tunerParams.dcOffsetTuner.dcCal = 3  # Periodic mode
@@ -928,49 +942,125 @@ class SDRplayDevice:
 
 
 def main():
-    """Test/demo of SDRplay direct API"""
+    """Test/demo of SDRplay direct API with optional file recording"""
+    import argparse
+    import signal
+
+    parser = argparse.ArgumentParser(description='SDRplay Direct API - GPS Signal Recording')
+    parser.add_argument('--output', type=str, help='Output file path for IQ samples (.dat)')
+    parser.add_argument('--duration', type=int, default=10, help='Recording duration in seconds (default: 10)')
+    parser.add_argument('--frequency', type=float, default=1575.42e6, help='Center frequency in Hz (default: 1575.42 MHz)')
+    parser.add_argument('--sample-rate', type=float, default=2.048e6, help='Sample rate in Hz (default: 2.048 MSPS)')
+    parser.add_argument('--gain-reduction', type=int, default=30, help='Gain reduction in dB (default: 30, lower = more gain)')
+    parser.add_argument('--tuner', type=int, default=1, choices=[1, 2], help='RSPduo tuner selection: 1 (Tuner A/Port 1) or 2 (Tuner B/Port 2) - default: 1')
+    args = parser.parse_args()
+
     print("=" * 70)
-    print("SDRplay Direct API Test")
+    if args.output:
+        print("SDRplay GPS Recording")
+        print(f"Output: {args.output}")
+    else:
+        print("SDRplay Direct API Test")
     print("=" * 70)
     print()
 
     sample_count = [0]
     start_time = [time.time()]
+    output_file = None
+    stop_requested = [False]
+
+    # Signal handler for graceful shutdown
+    def signal_handler(sig, frame):
+        print("\n\n🛑 Stopping recording...")
+        stop_requested[0] = True
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    # Open output file if specified
+    if args.output:
+        try:
+            output_file = open(args.output, 'wb')
+            print(f"✓ Opened output file: {args.output}")
+        except Exception as e:
+            print(f"❌ Failed to open output file: {e}")
+            return
 
     def data_callback(samples):
         """Callback that receives IQ samples"""
         sample_count[0] += len(samples)
+
+        # Write to file if recording
+        if output_file:
+            try:
+                # Write as complex64 (gr_complex format for GNSS-SDR)
+                samples.astype(np.complex64).tofile(output_file)
+            except Exception as e:
+                print(f"❌ Error writing to file: {e}")
+                stop_requested[0] = True
 
         # Print stats every second
         now = time.time()
         elapsed = now - start_time[0]
         if elapsed >= 1.0:
             rate = sample_count[0] / elapsed / 1e6
-            print(f"Received {sample_count[0] / 1e6:.1f} MSamples ({rate:.2f} MSPS)")
+            total_samples = sample_count[0]
+            total_mb = (total_samples * 8) / (1024 * 1024)  # complex64 = 8 bytes
+
+            if args.output:
+                print(f"Recording: {sample_count[0] / 1e6:.1f} MSamples, {total_mb:.1f} MB, {rate:.2f} MSPS", flush=True)
+            else:
+                print(f"Received {sample_count[0] / 1e6:.1f} MSamples ({rate:.2f} MSPS)")
+
             sample_count[0] = 0
             start_time[0] = now
 
     try:
         # Open device
         with SDRplayDevice() as sdr:
-            # Configure for GPS L1
-            sdr.set_frequency(1575.42e6)
-            sdr.set_gain(40)
+            # Configure
+            print(f"Configuring:")
+            print(f"  • Frequency: {args.frequency / 1e6:.2f} MHz")
+            print(f"  • Sample Rate: {args.sample_rate / 1e6:.3f} MSPS")
+            print(f"  • Gain Reduction: {args.gain_reduction} dB")
+            print()
+
+            sdr.set_frequency(args.frequency)
+            sdr.set_sample_rate(args.sample_rate)
+            sdr.set_gain(args.gain_reduction)
 
             # Start streaming
             sdr.start_streaming(data_callback)
 
-            print("\nStreaming for 10 seconds...")
-            time.sleep(10)
+            if args.output:
+                print(f"\n📡 Recording GPS data for {args.duration} seconds...")
+                print(f"Expected file size: ~{(args.sample_rate * args.duration * 8) / (1024 * 1024):.0f} MB")
+                print("Press Ctrl+C to stop early\n")
+            else:
+                print(f"\nStreaming for {args.duration} seconds...")
 
-            print("\nStopping...")
+            # Stream for specified duration or until interrupted
+            start = time.time()
+            while time.time() - start < args.duration and not stop_requested[0]:
+                time.sleep(0.1)
+
+            print("\n🛑 Stopping...")
 
     except KeyboardInterrupt:
-        print("\nInterrupted by user")
+        print("\n\n👋 Interrupted by user")
     except Exception as e:
-        print(f"\nError: {e}")
+        print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        # Close output file
+        if output_file:
+            output_file.close()
+            import os
+            size = os.path.getsize(args.output)
+            print(f"✓ Recording saved: {args.output}")
+            print(f"  File size: {size / (1024 * 1024):.1f} MB")
+            print(f"  Duration: ~{size / (args.sample_rate * 8):.1f} seconds")
 
 
 if __name__ == '__main__':

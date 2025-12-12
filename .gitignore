@@ -163,3 +163,5 @@ __pycache__/
 *.gpx
 *.kml
 GSDR*
+gnss-sdr/recordings/*
+!gnss-sdr/recordings/.gitinit

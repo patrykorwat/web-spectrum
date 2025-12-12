@@ -1,19 +1,19 @@
 #!/bin/bash
-# REAL GNSS-SDR Pipeline with SDRplay Direct API
-# Processes actual GPS signals from SDRplay device
+# REAL GNSS-SDR Pipeline with SDRplay via SoapySDR
+# NO FIFO - Direct GNU Radio connection!
 
 set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
-# Set library paths
+# Set library paths (CRITICAL for SoapySDR to find libsdrplay_api.so.3)
 export DYLD_LIBRARY_PATH="/usr/local/lib:$DYLD_LIBRARY_PATH"
 export PYTHONPATH="/opt/homebrew/lib/python3.14/site-packages:$PYTHONPATH"
 export PYTHONUNBUFFERED=1
 
 echo "========================================================================"
-echo "REAL GNSS-SDR Pipeline - SDRplay Direct API"
+echo "GNSS-SDR with SDRplay via SoapySDR (NO FIFO!)"
 echo "========================================================================"
 echo ""
 
@@ -31,9 +31,11 @@ echo "✓ Cleanup complete"
 echo ""
 
 echo "📡 Processing REAL GPS signals from SDRplay device"
-echo "   • SDRplay Direct API → FIFO → GNSS-SDR"
+echo "   • SDRplay → SoapySDR → GNU Radio → GNSS-SDR"
+echo "   • NO FIFO (direct connection, no blocking!)"
 echo "   • Sample rate: 2.048 MSPS"
 echo "   • Frequency: 1575.42 MHz (GPS L1)"
+echo "   • Gain: 29 dB"
 echo ""
 
 # Cleanup handler
