@@ -91,6 +91,9 @@ function SdrPlayDecoder() {
   // Satellite tracking history for chart (last 60 data points)
   const [satelliteHistory, setSatelliteHistory] = useState<Array<{time: number, count: number, avgCN0: number}>>([]);
 
+  // Jamming/Spoofing status
+  const [jammingStatus, setJammingStatus] = useState<any>(null);
+
   // Progress tracking for recording and processing
   const [progressPhase, setProgressPhase] = useState<string>('');
   const [progressPercent, setProgressPercent] = useState<number>(0);
@@ -192,11 +195,16 @@ function SdrPlayDecoder() {
       setRecordingFile(data.filename || '');
       setProgressMessage('Recording GPS data (5 minutes)...');
 
-      // Auto-stop after 5 minutes and notify user
-      setTimeout(() => {
+      // Auto-stop after 5 minutes and automatically start processing
+      setTimeout(async () => {
         setIsRecording(false);
         setProgressPhase('');
-        setProgressMessage(`✅ Recording complete! File: ${data.filename}. Click "Process & Get Position" to analyze.`);
+        setProgressMessage(`✅ Recording complete! Starting automatic processing...`);
+
+        // Automatically trigger processing after recording completes
+        setTimeout(() => {
+          processRecording();
+        }, 2000); // Wait 2 seconds for file to be fully written
       }, 305000); // 5 minutes + 5 seconds buffer
     } catch (error) {
       console.error('Recording error:', error);
@@ -210,7 +218,12 @@ function SdrPlayDecoder() {
       await fetch('http://localhost:3001/gnss/stop-recording', { method: 'POST' });
       setIsRecording(false);
       setProgressPhase('');
-      setProgressMessage('Recording stopped');
+      setProgressMessage('Recording stopped. Starting automatic processing...');
+
+      // Automatically trigger processing after manual stop
+      setTimeout(() => {
+        processRecording();
+      }, 2000); // Wait 2 seconds for file to be fully written
     } catch (error) {
       console.error('Stop recording error:', error);
     }
@@ -356,8 +369,7 @@ return (
                     return; // Early return - don't process as regular GNSS data
                   }
 
-                  // GNSS processing
-                  console.log(`[RtlDecoder] GNSS callback received, msg.msg type: ${msg.msg?.constructor?.name}, length: ${msg.msg?.length}`);
+                  // GNSS processing (debug logging removed for cleaner console output)
 
                   // Check if msg.msg is already a JSON result object (from parse_gnss_logs)
                   // or if it's a Uint8Array buffer that needs processing
@@ -426,6 +438,11 @@ return (
                     setDecodedItems(prevDecodedItems => {
                       return [gnssMsg, ...prevDecodedItems];
                     });
+
+                    // Update jamming status
+                    if (result.jamming) {
+                      setJammingStatus(result.jamming);
+                    }
 
                     // Update satellite history for chart
                     setSatelliteHistory(prevHistory => {
@@ -623,6 +640,67 @@ return (
                 Configured for: RSPduo Tuner {recordingConfig.tuner} with Bias-T {recordingConfig.bias_tee}
               </Typography>
             </Typography>
+          </Box>
+        )}
+
+        {/* Jamming/Spoofing Status Indicator */}
+        {jammingStatus && (
+          <Box sx={{
+            marginBottom: '15px',
+            padding: '12px',
+            backgroundColor: jammingStatus.isJammed
+              ? (jammingStatus.severity === 'SPOOFING_DETECTED' || jammingStatus.severity === 'SEVERE')
+                ? 'rgba(211, 47, 47, 0.15)'
+                : 'rgba(255, 152, 0, 0.15)'
+              : 'rgba(76, 175, 80, 0.15)',
+            borderRadius: '4px',
+            border: jammingStatus.isJammed
+              ? (jammingStatus.severity === 'SPOOFING_DETECTED' || jammingStatus.severity === 'SEVERE')
+                ? '2px solid rgba(211, 47, 47, 0.5)'
+                : '2px solid rgba(255, 152, 0, 0.5)'
+              : '1px solid rgba(76, 175, 80, 0.3)'
+          }}>
+            <Typography variant="subtitle2" sx={{ marginBottom: '8px', fontWeight: 'bold' }}>
+              {jammingStatus.isJammed ? '⚠️ GPS Interference Detected' : '✅ GPS Signal Status: Normal'}
+            </Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.875rem' }}>
+              <Box>
+                <strong>Status:</strong> {jammingStatus.isJammed ? 'JAMMED' : 'Clear'}
+              </Box>
+              <Box>
+                <strong>Severity:</strong> {jammingStatus.severity || 'N/A'}
+              </Box>
+              <Box>
+                <strong>Type:</strong> {jammingStatus.type || 'N/A'}
+              </Box>
+              <Box>
+                <strong>Avg C/N0:</strong> {jammingStatus.avgCN0 ? jammingStatus.avgCN0.toFixed(1) : 'N/A'} dB-Hz
+              </Box>
+              {jammingStatus.cn0Variation !== undefined && (
+                <Box>
+                  <strong>C/N0 Variation:</strong> {jammingStatus.cn0Variation.toFixed(2)} dB
+                </Box>
+              )}
+              {jammingStatus.dopplerVariation !== undefined && (
+                <Box>
+                  <strong>Doppler Var:</strong> {jammingStatus.dopplerVariation.toFixed(1)} Hz
+                </Box>
+              )}
+              {jammingStatus.cn0Correlation !== undefined && (
+                <Box>
+                  <strong>C/N0 Correlation:</strong> {jammingStatus.cn0Correlation.toFixed(3)}
+                </Box>
+              )}
+            </Box>
+            {jammingStatus.isJammed && (
+              <Typography variant="caption" sx={{ display: 'block', marginTop: '8px', fontStyle: 'italic', color: 'text.secondary' }}>
+                {jammingStatus.type === 'BROADBAND_NOISE' && '📡 Likely RF jamming from external source (e.g., Kaliningrad region jammers)'}
+                {jammingStatus.type === 'HIGH_CONFIDENCE_SPOOFING' && '🚨 High confidence GPS spoofing attack detected!'}
+                {jammingStatus.type === 'POSSIBLE_SPOOFING' && '⚠️ Possible spoofing - abrupt signal changes detected'}
+                {jammingStatus.type === 'SUSPECTED_SPOOFING_LOW_DOPPLER' && '⚠️ Suspected spoofing - constant Doppler indicates fixed-location attacker'}
+                {jammingStatus.type === 'CW_TONE' && '📻 Continuous wave interference detected'}
+              </Typography>
+            )}
           </Box>
         )}
 
