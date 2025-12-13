@@ -62,6 +62,14 @@ const toHex = (buffer: Uint8Array) => {
   return Array.prototype.map.call(buffer, (x: number) => ('00' + x.toString(16)).slice(-2)).join('');
 }
 
+const maskSerial = (serial: string) => {
+  if (!serial || serial.length <= 4) return serial;
+  const first2 = serial.slice(0, 2);
+  const last2 = serial.slice(-2);
+  const middle = '*'.repeat(serial.length - 4);
+  return `${first2}${middle}${last2}`;
+}
+
 function SdrPlayDecoder() {
   const [protocol, setProtocol] = useState<Protocol>(Protocol.GNSS_GPS_L1);
   const [frequency, setFrequency] = useState<number>(1575.42);
@@ -110,6 +118,10 @@ function SdrPlayDecoder() {
   const [recordingConfig, setRecordingConfig] = useState<any>(null);
   const [deviceInfo, setDeviceInfo] = useState<any>(null);
   const [selectedPort, setSelectedPort] = useState<number>(2); // Default to Port 2
+
+  // Spectrum analysis results
+  const [spectrumAnalysis, setSpectrumAnalysis] = useState<any>(null);
+  const [spectrumImageUrl, setSpectrumImageUrl] = useState<string | null>(null);
 
   const pointsBatch = 10000;
 
@@ -176,6 +188,19 @@ function SdrPlayDecoder() {
   // File-based GPS recording controls
   const startRecording = async () => {
     try {
+      // Check device availability first
+      setProgressMessage('Checking SDRplay device availability...');
+      const deviceCheckResponse = await fetch('http://localhost:3001/gnss/device-info');
+
+      if (deviceCheckResponse.ok) {
+        const deviceCheck = await deviceCheckResponse.json();
+        if (!deviceCheck.devices || deviceCheck.devices.length === 0) {
+          alert('⚠️ SDRplay device not available!\n\nThe device may be:\n• In use by another application (SDRconnect, CubicSDR, etc.)\n• Disconnected\n• Not powered\n\nPlease close other SDR applications and try again.');
+          setProgressMessage('');
+          return;
+        }
+      }
+
       setIsRecording(true);
       setProgressPhase('recording');
       setProgressPercent(0);
@@ -195,15 +220,35 @@ function SdrPlayDecoder() {
       setRecordingFile(data.filename || '');
       setProgressMessage('Recording GPS data (5 minutes)...');
 
+      // Poll for recording errors (check every 5 seconds)
+      const recordingPollInterval = setInterval(async () => {
+        try {
+          const statusResponse = await fetch('http://localhost:3001/gnss/status');
+          if (statusResponse.ok) {
+            const status = await statusResponse.json();
+            if (status.recording.error) {
+              clearInterval(recordingPollInterval);
+              setIsRecording(false);
+              setProgressPhase('');
+              setProgressMessage('');
+              alert(`❌ Recording failed!\n\n${status.recording.error}\n\nPlease close other SDR applications (SDRconnect, CubicSDR, etc.) and try again.`);
+            }
+          }
+        } catch (err) {
+          console.error('Recording status poll error:', err);
+        }
+      }, 5000);
+
       // Auto-stop after 5 minutes and automatically start processing
       setTimeout(async () => {
+        clearInterval(recordingPollInterval);
         setIsRecording(false);
         setProgressPhase('');
         setProgressMessage(`✅ Recording complete! Starting automatic processing...`);
 
         // Automatically trigger processing after recording completes
         setTimeout(() => {
-          processRecording();
+          document.querySelector('[data-process-button]')?.click();
         }, 2000); // Wait 2 seconds for file to be fully written
       }, 305000); // 5 minutes + 5 seconds buffer
     } catch (error) {
@@ -222,7 +267,7 @@ function SdrPlayDecoder() {
 
       // Automatically trigger processing after manual stop
       setTimeout(() => {
-        processRecording();
+        document.querySelector('[data-process-button]')?.click();
       }, 2000); // Wait 2 seconds for file to be fully written
     } catch (error) {
       console.error('Stop recording error:', error);
@@ -247,50 +292,95 @@ function SdrPlayDecoder() {
         body: JSON.stringify({ filename: recordingFile })
       });
 
-      if (!response.ok) throw new Error('Failed to start processing');
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to start processing: ${errorText}`);
+      }
+
+      const data = await response.json();
+      console.log('Processing started:', data);
 
       // Poll for status updates every 2 seconds
+      let pollCount = 0;
+      const maxPolls = 900; // 30 minutes max (900 * 2 seconds)
+
       const pollInterval = setInterval(async () => {
         try {
+          pollCount++;
           const statusResponse = await fetch('http://localhost:3001/gnss/status');
-          if (statusResponse.ok) {
-            const status = await statusResponse.json();
 
-            if (status.processing.active) {
-              // Still processing - update status
-              const duration = status.processing.duration;
-              const minutes = Math.floor(duration / 60);
-              const seconds = duration % 60;
-              setProgressMessage(
-                `Processing: ${minutes}m ${seconds}s elapsed... ${status.processing.status || 'Running GNSS-SDR'}`
-              );
-            } else {
-              // Processing complete
-              clearInterval(pollInterval);
-              setIsProcessing(false);
-              setProgressPhase('');
-              setProgressMessage('✅ Processing complete! Check for output files or satellite data above.');
+          if (!statusResponse.ok) {
+            console.error('Status endpoint error:', statusResponse.status);
+            return;
+          }
+
+          const status = await statusResponse.json();
+          console.log(`Poll ${pollCount}: processing.active = ${status.processing.active}, duration = ${status.processing.duration}s`);
+
+          if (status.processing.active) {
+            // Still processing - update status
+            const duration = status.processing.duration;
+            const minutes = Math.floor(duration / 60);
+            const seconds = duration % 60;
+            const message = `Processing: ${minutes}m ${seconds}s elapsed... ${status.processing.status || 'Running GNSS-SDR'}`;
+            console.log('Updating progress message:', message);
+            setProgressMessage(message);
+            setProgressPhase('processing'); // Ensure phase is set
+            setIsProcessing(true); // Ensure processing flag is set
+
+            // Check for spectrum analysis results (generated after ~10-15 seconds)
+            if (duration > 10 && recordingFile) {
+              const spectrumJsonUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum_analysis.json')}`;
+              fetch(spectrumJsonUrl)
+                .then(res => res.ok ? res.json() : null)
+                .then(data => {
+                  if (data && !spectrumAnalysis) {
+                    console.log('Spectrum analysis loaded:', data);
+                    setSpectrumAnalysis(data);
+                    setSpectrumImageUrl(`http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}`);
+                  }
+                })
+                .catch(() => {});  // Silently fail if not ready yet
             }
+          } else {
+            // Processing complete or not started
+            clearInterval(pollInterval);
+            setIsProcessing(false);
+            setProgressPhase('');
+
+            // Check if there was an error
+            if (status.processing.error) {
+              setProgressMessage(`❌ ${status.processing.error}`);
+            } else if (pollCount === 1) {
+              // First poll already shows inactive - processing may have failed to start
+              setProgressMessage('⚠️ Processing did not start. Check backend logs.');
+            } else if (status.processing.duration > 0) {
+              // Processing ran and completed
+              setProgressMessage('✅ Processing complete! Check for output files or satellite data above.');
+            } else {
+              // Processing inactive with zero duration - unexpected state
+              setProgressMessage('⚠️ Processing stopped unexpectedly. Check backend logs.');
+            }
+          }
+
+          // Safety timeout check
+          if (pollCount >= maxPolls) {
+            clearInterval(pollInterval);
+            setIsProcessing(false);
+            setProgressPhase('');
+            setProgressMessage('⚠️ Processing timeout - check logs');
           }
         } catch (pollError) {
           console.error('Status poll error:', pollError);
+          // Don't stop polling on network errors - keep trying
         }
       }, 2000);
-
-      // Safety timeout - stop polling after 30 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        if (isProcessing) {
-          setIsProcessing(false);
-          setProgressPhase('');
-          setProgressMessage('⚠️ Processing timeout - check logs');
-        }
-      }, 1800000);
 
     } catch (error) {
       console.error('Processing error:', error);
       setIsProcessing(false);
-      setProgressMessage(`Error: ${error}`);
+      setProgressPhase('');
+      setProgressMessage(`❌ Error: ${error}`);
     }
   };
 
@@ -357,7 +447,7 @@ return (
                 } else if (isGNSS(protocol)) {
                   // Check if this is a GNSS log message
                   if (msg.msg && typeof msg.msg === 'object' && msg.msg.type === 'gnss_log') {
-                    // GNSS log message from parse_gnss_logs.py
+                    // GNSS log message from GNSS-SDR processing
                     const logMsg = {
                       decoded: msg.msg.message,
                       time: new Date(msg.msg.timestamp),
@@ -366,6 +456,48 @@ return (
                     setDecodedItems(prevDecodedItems => {
                       return [logMsg, ...prevDecodedItems];
                     });
+
+                    // Parse log message for satellite tracking info
+                    // GNSS-SDR format: "Tracking of GPS L1 C/A signal started on channel X for satellite GPS PRN Y"
+                    // or "Loss of lock in channel X!"
+                    const message = msg.msg.message;
+
+                    // Track satellites by counting tracking starts and losses
+                    const trackingStarted = message.match(/Tracking of GPS .* signal started on channel (\d+) for satellite GPS PRN (\d+)/i);
+                    const lossOfLock = message.match(/Loss of lock in channel (\d+)/i);
+                    const cn0Match = message.match(/CN0\s*=\s*([\d.]+)\s*dB-Hz/i); // Rare, but try anyway
+
+                    // Use a ref or state to track currently locked satellites
+                    if (trackingStarted || lossOfLock || cn0Match) {
+                      setSatelliteHistory(prev => {
+                        const now = Date.now();
+
+                        // Get current tracking count from last entry or start fresh
+                        let currentCount = prev.length > 0 ? prev[prev.length - 1].count : 0;
+                        let currentCN0 = prev.length > 0 ? prev[prev.length - 1].avgCN0 : 0;
+
+                        if (trackingStarted) {
+                          currentCount = Math.min(currentCount + 1, 12); // Max 12 channels
+                        } else if (lossOfLock) {
+                          currentCount = Math.max(currentCount - 1, 0);
+                        }
+
+                        if (cn0Match) {
+                          currentCN0 = parseFloat(cn0Match[1]);
+                        }
+
+                        const newEntry = {
+                          time: now,
+                          count: currentCount,
+                          avgCN0: currentCN0
+                        };
+
+                        // Add entry and keep last 100 points
+                        const updated = [...prev, newEntry];
+                        return updated.slice(-100);
+                      });
+                    }
+
                     return; // Early return - don't process as regular GNSS data
                   }
 
@@ -569,7 +701,7 @@ return (
         <Typography variant="body2" sx={{ marginBottom: '15px', color: 'text.secondary' }}>
           Record GPS data to file, then process offline for reliable position fix.
           <br />
-          <strong>No FIFO blocking!</strong> This approach records 5 minutes of IQ data, then processes it with GNSS-SDR.
+          This approach records 5 minutes of IQ data, then processes it with GNSS-SDR.
         </Typography>
 
         {/* Device Info - if any SDRplay device detected */}
@@ -579,7 +711,7 @@ return (
               📡 Detected Device
             </Typography>
             <Typography variant="body2">
-              <strong>Model:</strong> {deviceInfo.devices[0].model} (Serial: {deviceInfo.devices[0].serial})
+              <strong>Model:</strong> {deviceInfo.devices[0].model} (Serial: {maskSerial(deviceInfo.devices[0].serial)})
               <br />
 
               {/* RSPduo and RSP2: Show port selection (RSPduo can be detected as RSP2) */}
@@ -632,12 +764,15 @@ return (
 
         {/* Show info if no RSPduo or device detection failed */}
         {deviceInfo && (!deviceInfo.devices || deviceInfo.devices.length === 0) && recordingConfig && (
-          <Box sx={{ marginBottom: '15px', padding: '12px', backgroundColor: 'rgba(255, 152, 0, 0.1)', borderRadius: '4px', border: '1px solid rgba(255, 152, 0, 0.3)' }}>
-            <Typography variant="body2" color="warning.main">
-              ⚠️ SDRplay device not detected (may be in use)
+          <Box sx={{ marginBottom: '15px', padding: '12px', backgroundColor: isRecording ? 'rgba(33, 150, 243, 0.1)' : 'rgba(255, 152, 0, 0.1)', borderRadius: '4px', border: isRecording ? '1px solid rgba(33, 150, 243, 0.3)' : '1px solid rgba(255, 152, 0, 0.3)' }}>
+            <Typography variant="body2" color={isRecording ? 'info.main' : 'warning.main'}>
+              {isRecording ? 'ℹ️ Device in use (recording active)' : '⚠️ SDRplay device not detected (may be in use)'}
               <br />
               <Typography variant="caption" color="text.secondary">
-                Configured for: RSPduo Tuner {recordingConfig.tuner} with Bias-T {recordingConfig.bias_tee}
+                {isRecording
+                  ? 'Device is currently recording GPS data. Detection unavailable during active recording.'
+                  : `Configured for: RSPduo Tuner ${recordingConfig.tuner} with Bias-T ${recordingConfig.bias_tee}`
+                }
               </Typography>
             </Typography>
           </Box>
@@ -771,6 +906,7 @@ return (
             disabled={isRecording || isProcessing || !recordingFile}
             color="success"
             sx={{ textTransform: 'none' }}
+            data-process-button
           >
             🔄 Process & Get Position
           </Button>
@@ -778,7 +914,10 @@ return (
 
         {/* Progress Display */}
         {(progressPhase === 'recording' || progressPhase === 'processing') && (
-          <Box sx={{ marginTop: '15px' }}>
+          <Box sx={{ marginTop: '15px', padding: '15px', backgroundColor: 'rgba(33, 150, 243, 0.1)', borderRadius: '4px', border: '2px solid rgba(33, 150, 243, 0.5)' }}>
+            <Typography variant="subtitle2" sx={{ marginBottom: '10px', fontWeight: 'bold', color: 'info.main' }}>
+              🔄 {progressPhase === 'recording' ? 'Recording in Progress' : 'Processing in Progress'}
+            </Typography>
             <LinearProgress
               variant={progressPercent > 0 ? 'determinate' : 'indeterminate'}
               value={progressPercent}
@@ -792,6 +931,111 @@ return (
               <Typography variant="caption" sx={{ display: 'block', marginTop: '5px', fontFamily: 'monospace', color: 'text.secondary' }}>
                 File: {recordingFile}
               </Typography>
+            )}
+          </Box>
+        )}
+
+        {/* Spectrum Analysis Results */}
+        {spectrumAnalysis && (
+          <Box sx={{ marginTop: '20px', padding: '15px', backgroundColor: 'rgba(255, 152, 0, 0.1)', borderRadius: '4px', border: '1px solid rgba(255, 152, 0, 0.3)' }}>
+            <Typography variant="subtitle2" sx={{ marginBottom: '15px', fontWeight: 'bold', color: 'warning.main' }}>
+              📊 Spectrum Analysis - Jamming Detection
+            </Typography>
+
+            {/* Detection Summary */}
+            <Box sx={{ marginBottom: '15px', padding: '10px', backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: '4px' }}>
+              {spectrumAnalysis.summary?.jamming_detected ? (
+                <Typography variant="body2" sx={{ color: 'error.main', fontWeight: 'bold' }}>
+                  ⚠️ JAMMING DETECTED: {spectrumAnalysis.summary.primary_threat.toUpperCase()}
+                  <br />
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    Confidence: {(spectrumAnalysis.summary.max_confidence * 100).toFixed(1)}%
+                  </Typography>
+                </Typography>
+              ) : (
+                <Typography variant="body2" sx={{ color: 'success.main' }}>
+                  ✓ No jamming detected (clean signal)
+                </Typography>
+              )}
+            </Box>
+
+            {/* Detection Details */}
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '15px' }}>
+              {/* Sweep Jammer */}
+              <Box sx={{ padding: '10px', backgroundColor: spectrumAnalysis.detections?.sweep?.detected ? 'rgba(244, 67, 54, 0.1)' : 'rgba(0,0,0,0.02)', borderRadius: '4px' }}>
+                <Typography variant="caption" sx={{ fontWeight: 'bold', display: 'block' }}>
+                  {spectrumAnalysis.detections?.sweep?.detected ? '⚠️ ' : '✓ '}
+                  Sweep Jammer
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                  {spectrumAnalysis.detections?.sweep?.detected
+                    ? Math.abs(spectrumAnalysis.detections.sweep.sweep_rate_hz_per_sec) > 1000
+                      ? `Sweep rate: ${(spectrumAnalysis.detections.sweep.sweep_rate_hz_per_sec / 1e6).toFixed(2)} MHz/s`
+                      : `Sweep rate: ${(spectrumAnalysis.detections.sweep.sweep_rate_hz_per_sec).toFixed(0)} Hz/s`
+                    : 'Not detected'
+                  }
+                </Typography>
+              </Box>
+
+              {/* Pulse Jammer */}
+              <Box sx={{ padding: '10px', backgroundColor: spectrumAnalysis.detections?.pulse?.detected ? 'rgba(244, 67, 54, 0.1)' : 'rgba(0,0,0,0.02)', borderRadius: '4px' }}>
+                <Typography variant="caption" sx={{ fontWeight: 'bold', display: 'block' }}>
+                  {spectrumAnalysis.detections?.pulse?.detected ? '⚠️ ' : '✓ '}
+                  Pulse Jammer
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                  {spectrumAnalysis.detections?.pulse?.detected
+                    ? `${spectrumAnalysis.detections.pulse.pulse_rate_hz.toFixed(1)} Hz, ${(spectrumAnalysis.detections.pulse.duty_cycle * 100).toFixed(1)}% duty`
+                    : 'Not detected'
+                  }
+                </Typography>
+              </Box>
+
+              {/* Noise Jammer */}
+              <Box sx={{ padding: '10px', backgroundColor: spectrumAnalysis.detections?.noise?.detected ? 'rgba(244, 67, 54, 0.1)' : 'rgba(0,0,0,0.02)', borderRadius: '4px' }}>
+                <Typography variant="caption" sx={{ fontWeight: 'bold', display: 'block' }}>
+                  {spectrumAnalysis.detections?.noise?.detected ? '⚠️ ' : '✓ '}
+                  Noise Jammer
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                  {spectrumAnalysis.detections?.noise?.detected
+                    ? `Floor: ${spectrumAnalysis.detections.noise.noise_floor_db.toFixed(1)} dBFS`
+                    : 'Not detected'
+                  }
+                </Typography>
+              </Box>
+
+              {/* Meaconing */}
+              <Box sx={{ padding: '10px', backgroundColor: spectrumAnalysis.detections?.meaconing?.detected ? 'rgba(244, 67, 54, 0.1)' : 'rgba(0,0,0,0.02)', borderRadius: '4px' }}>
+                <Typography variant="caption" sx={{ fontWeight: 'bold', display: 'block' }}>
+                  {spectrumAnalysis.detections?.meaconing?.detected ? '⚠️ ' : '✓ '}
+                  Meaconing/Spoofing
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                  {spectrumAnalysis.detections?.meaconing?.detected
+                    ? `${spectrumAnalysis.detections.meaconing.num_signals} suspicious signals`
+                    : 'Not detected'
+                  }
+                </Typography>
+              </Box>
+            </Box>
+
+            {/* Spectrum Visualization */}
+            {spectrumImageUrl && (
+              <Box sx={{ marginTop: '15px' }}>
+                <Typography variant="caption" sx={{ display: 'block', marginBottom: '10px', color: 'text.secondary' }}>
+                  Spectrogram (Time-Frequency Analysis)
+                </Typography>
+                <img
+                  src={spectrumImageUrl}
+                  alt="Spectrum Analysis"
+                  style={{ width: '100%', maxWidth: '900px', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '4px' }}
+                  onError={(e) => {
+                    console.log('Spectrum image failed to load');
+                    e.currentTarget.style.display = 'none';
+                  }}
+                />
+              </Box>
             )}
           </Box>
         )}

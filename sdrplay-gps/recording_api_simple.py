@@ -71,16 +71,37 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
             recording_active = recording_process and recording_process.poll() is None
             processing_active = processing_process and processing_process.poll() is None
 
+            # Check if recording exited with error (0 byte file = device in use)
+            recording_error = None
+            if recording_process and not recording_active and current_recording:
+                exit_code = recording_process.returncode
+                file_size = os.path.getsize(current_recording) if os.path.exists(current_recording) else 0
+                if file_size == 0:
+                    recording_error = 'Recording failed - device may be in use by another application'
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Recording failed: 0 bytes written (device in use?)")
+                elif exit_code != 0:
+                    recording_error = f'Recording exited with code {exit_code}'
+
+            # Check if processing exited with error
+            processing_error = None
+            if processing_process and not processing_active and processing_start_time:
+                exit_code = processing_process.returncode
+                if exit_code != 0:
+                    processing_error = f'GNSS-SDR exited with code {exit_code}'
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] GNSS-SDR processing failed: exit code {exit_code}")
+
             status = {
                 'recording': {
                     'active': recording_active,
                     'filename': os.path.basename(current_recording) if current_recording else None,
-                    'duration': int(time.time() - recording_start_time) if recording_active and recording_start_time else 0
+                    'duration': int(time.time() - recording_start_time) if recording_active and recording_start_time else 0,
+                    'error': recording_error
                 },
                 'processing': {
                     'active': processing_active,
-                    'duration': int(time.time() - processing_start_time) if processing_active and processing_start_time else 0,
-                    'status': processing_status
+                    'duration': int(time.time() - processing_start_time) if processing_start_time else 0,
+                    'status': processing_error if processing_error else processing_status,
+                    'error': processing_error
                 },
                 'recordings': []
             }
@@ -123,6 +144,39 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
                     'error': f'Device detection failed: {str(e)}',
                     'devices': []
                 }).encode())
+
+        elif self.path.startswith('/gnss/recordings/'):
+            # Serve individual files (spectrum analysis, plots, etc.)
+            filename = self.path.split('/gnss/recordings/')[-1]
+            filepath = os.path.join(RECORDINGS_DIR, filename)
+
+            if os.path.exists(filepath) and os.path.isfile(filepath):
+                # Determine content type
+                if filename.endswith('.json'):
+                    content_type = 'application/json'
+                elif filename.endswith('.png'):
+                    content_type = 'image/png'
+                elif filename.endswith('.txt') or filename.endswith('.log'):
+                    content_type = 'text/plain'
+                else:
+                    content_type = 'application/octet-stream'
+
+                # Read and serve file
+                with open(filepath, 'rb') as f:
+                    file_data = f.read()
+
+                self.send_response(200)
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Length', len(file_data))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(file_data)
+            else:
+                self.send_response(404)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': 'File not found'}).encode())
 
         elif self.path == '/gnss/recordings':
             # List all recordings
@@ -298,16 +352,42 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
                     }).encode())
                     return
 
-                # Create GNSS-SDR config
+                # Create GNSS-SDR config from template
                 config_path = os.path.join(RECORDINGS_DIR, f"{filename}.conf")
                 output_basename = os.path.join(RECORDINGS_DIR, filename.replace('.dat', ''))
 
-                config_content = f"""; GNSS-SDR Configuration for Recorded File
-; Optimized for stationary receiver with good C/N0
+                # Try to load template file
+                template_path = os.path.join(SCRIPT_DIR, 'gnss_sdr_template.conf')
+
+                if os.path.exists(template_path):
+                    # Use template and customize paths
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Using template: {template_path}")
+                    with open(template_path, 'r') as f:
+                        config_content = f.read()
+
+                    # Replace placeholders in template
+                    config_content = config_content.replace('SignalSource.filename=', f'SignalSource.filename={filepath}')
+                    # Don't add extra slash if RECORDINGS_DIR already ends with /
+                    kml_path = RECORDINGS_DIR if RECORDINGS_DIR.endswith('/') else f'{RECORDINGS_DIR}/'
+                    gpx_path = RECORDINGS_DIR if RECORDINGS_DIR.endswith('/') else f'{RECORDINGS_DIR}/'
+                    config_content = config_content.replace('PVT.kml_output_path=', f'PVT.kml_output_path={kml_path}')
+                    config_content = config_content.replace('PVT.gpx_output_path=', f'PVT.gpx_output_path={gpx_path}')
+                    config_content = config_content.replace('PVT.nmea_dump_filename=output.nmea', f'PVT.nmea_dump_filename={output_basename}.nmea')
+
+                    # Add signal source filename if not present
+                    if 'SignalSource.filename=' not in config_content or f'SignalSource.filename={filepath}' not in config_content:
+                        # Insert filename after SignalSource.implementation
+                        config_content = config_content.replace(
+                            'SignalSource.implementation=File_Signal_Source',
+                            f'SignalSource.implementation=File_Signal_Source\nSignalSource.filename={filepath}'
+                        )
+                else:
+                    # Fallback to hardcoded config if template doesn't exist
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Template not found, using default config")
+                    config_content = f"""; GNSS-SDR Configuration (Auto-generated)
 [GNSS-SDR]
 GNSS-SDR.internal_fs_sps=2048000
 
-;######### SIGNAL SOURCE CONFIG ############
 SignalSource.implementation=File_Signal_Source
 SignalSource.filename={filepath}
 SignalSource.item_type=gr_complex
@@ -318,54 +398,9 @@ SignalSource.repeat=false
 SignalSource.dump=false
 SignalSource.enable_throttle_control=true
 
-;######### SIGNAL CONDITIONER CONFIG ############
-SignalConditioner.implementation=Signal_Conditioner
-
-;######### DATA TYPE ADAPTER CONFIG ############
-DataTypeAdapter.implementation=Pass_Through
-DataTypeAdapter.item_type=gr_complex
-
-;######### INPUT FILTER CONFIG ############
-InputFilter.implementation=Freq_Xlating_Fir_Filter
-InputFilter.input_item_type=gr_complex
-InputFilter.output_item_type=gr_complex
-InputFilter.taps_item_type=float
-InputFilter.number_of_taps=5
-InputFilter.number_of_bands=2
-InputFilter.band1_begin=0.0
-InputFilter.band1_end=0.45
-InputFilter.band2_begin=0.55
-InputFilter.band2_end=1.0
-InputFilter.ampl1_begin=1.0
-InputFilter.ampl1_end=1.0
-InputFilter.ampl2_begin=0.0
-InputFilter.ampl2_end=0.0
-InputFilter.band1_error=1.0
-InputFilter.band2_error=1.0
-InputFilter.filter_type=bandpass
-InputFilter.grid_density=16
-InputFilter.sampling_frequency=2048000
-InputFilter.IF=0
-
-;######### RESAMPLER CONFIG ############
-Resampler.implementation=Pass_Through
-Resampler.item_type=gr_complex
-
-;######### CHANNELS GLOBAL CONFIG ############
 Channels_1C.count=8
 Channels.in_acquisition=1
 
-;######### GPS L1 C/A CHANNEL CONFIG ############
-Channel0.signal=1C
-Channel1.signal=1C
-Channel2.signal=1C
-Channel3.signal=1C
-Channel4.signal=1C
-Channel5.signal=1C
-Channel6.signal=1C
-Channel7.signal=1C
-
-;######### GPS L1 C/A ACQUISITION CONFIG ############
 Acquisition_1C.implementation=GPS_L1_CA_PCPS_Acquisition
 Acquisition_1C.item_type=gr_complex
 Acquisition_1C.coherent_integration_time_ms=1
@@ -373,26 +408,15 @@ Acquisition_1C.pfa=0.01
 Acquisition_1C.doppler_max=5000
 Acquisition_1C.doppler_step=250
 Acquisition_1C.threshold=0.008
-Acquisition_1C.dump=false
 
-;######### GPS L1 C/A TRACKING CONFIG ############
-; Optimized for stationary receiver with good signal
 Tracking_1C.implementation=GPS_L1_CA_DLL_PLL_Tracking
 Tracking_1C.item_type=gr_complex
 Tracking_1C.pll_bw_hz=10.0
 Tracking_1C.dll_bw_hz=1.0
-Tracking_1C.fll_bw_hz=10.0
-Tracking_1C.enable_fll_pull_in=true
-Tracking_1C.pll_bw_narrow_hz=5.0
-Tracking_1C.dll_bw_narrow_hz=0.5
 
-;######### TELEMETRY DECODER CONFIG ############
 TelemetryDecoder_1C.implementation=GPS_L1_CA_Telemetry_Decoder
-
-;######### OBSERVABLES CONFIG ############
 Observables.implementation=Hybrid_Observables
 
-;######### PVT CONFIG ############
 PVT.implementation=RTKLIB_PVT
 PVT.positioning_mode=Single
 PVT.output_rate_ms=100
@@ -402,8 +426,6 @@ PVT.kml_output_path={RECORDINGS_DIR}/
 PVT.gpx_output_enabled=true
 PVT.gpx_output_path={RECORDINGS_DIR}/
 PVT.nmea_dump_filename={output_basename}.nmea
-PVT.nmea_dump_devname=/dev/pts/4
-PVT.flag_nmea_tty_port=false
 PVT.enable_monitor=true
 PVT.monitor_udp_port=1234
 """
@@ -416,8 +438,15 @@ PVT.monitor_udp_port=1234
                 env['DYLD_LIBRARY_PATH'] = '/usr/local/lib:' + env.get('DYLD_LIBRARY_PATH', '')
                 env['PYTHONUNBUFFERED'] = '1'
 
-                parse_script = os.path.join(SCRIPT_DIR, 'parse_gnss_logs.py')
-                cmd = f"gnss-sdr --config_file={config_path} 2>&1 | python3 -u {parse_script}"
+                # Check if gnss-sdr exists
+                try:
+                    subprocess.run(['which', 'gnss-sdr'], check=True, capture_output=True)
+                except subprocess.CalledProcessError:
+                    raise Exception('gnss-sdr not found in PATH. Install GNSS-SDR first.')
+
+                # Run GNSS-SDR directly without parse script (it doesn't exist)
+                # Output goes to NMEA/KML files specified in config
+                cmd = f"gnss-sdr --config_file={config_path}"
 
                 processing_process = subprocess.Popen(
                     cmd,
@@ -430,7 +459,123 @@ PVT.monitor_udp_port=1234
                 )
 
                 processing_start_time = time.time()
-                processing_status = 'Starting GNSS-SDR processing...'
+                processing_status = 'GNSS-SDR processing started...'
+
+                # Log that processing started
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting GNSS-SDR processing:")
+                print(f"  Config: {config_path}")
+                print(f"  Input: {filepath}")
+                print(f"  Output base: {output_basename}")
+                print(f"  PID: {processing_process.pid}")
+
+                # Start a background thread to stream GNSS-SDR logs to WebSocket AND save to file
+                def stream_logs():
+                    """Stream GNSS-SDR stdout to WebSocket clients via bridge and save to log file"""
+                    # Create log file for this processing run
+                    log_filename = filepath.replace('.dat', '_gnss.log')
+
+                    try:
+                        import asyncio
+                        import websockets
+                        import json as json_lib
+
+                        async def send_logs():
+                            ws = None
+                            log_file = None
+
+                            try:
+                                # Connect to WebSocket bridge
+                                ws = await websockets.connect('ws://localhost:8766')
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] Connected to WebSocket bridge for log streaming")
+                            except Exception as e:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] Warning: Could not connect to WebSocket: {e}")
+
+                            try:
+                                # Open log file for writing
+                                log_file = open(log_filename, 'w', buffering=1)
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] Saving GNSS-SDR logs to: {log_filename}")
+                            except Exception as e:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] Warning: Could not open log file: {e}")
+
+                            # Stream logs line by line
+                            try:
+                                for line in iter(processing_process.stdout.readline, ''):
+                                    if not line:
+                                        break
+
+                                    # Print to console
+                                    print(f"[GNSS-SDR] {line.rstrip()}")
+
+                                    # Write to log file
+                                    if log_file:
+                                        log_file.write(line)
+                                        log_file.flush()
+
+                                    # Send to WebSocket bridge
+                                    if ws:
+                                        try:
+                                            log_msg = {
+                                                'type': 'gnss_log',
+                                                'message': line.rstrip(),
+                                                'timestamp': datetime.now().isoformat()
+                                            }
+                                            await ws.send(json_lib.dumps(log_msg))
+                                        except:
+                                            pass  # WebSocket disconnected
+
+                            finally:
+                                if log_file:
+                                    log_file.close()
+                                    print(f"[{datetime.now().strftime('%H:%M:%S')}] GNSS-SDR log saved to: {log_filename}")
+                                if ws:
+                                    await ws.close()
+
+                        # Run async event loop in thread
+                        asyncio.run(send_logs())
+
+                    except Exception as e:
+                        # Fall back to just printing and saving logs
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] WebSocket error, saving logs to file only: {e}")
+                        try:
+                            with open(log_filename, 'w', buffering=1) as log_file:
+                                for line in iter(processing_process.stdout.readline, ''):
+                                    if line:
+                                        print(f"[GNSS-SDR] {line.rstrip()}")
+                                        log_file.write(line)
+                        except Exception as e2:
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Could not save logs: {e2}")
+
+                # Start log streaming thread
+                log_thread = threading.Thread(target=stream_logs, daemon=True)
+                log_thread.start()
+
+                # Run spectrum analysis in parallel (non-blocking)
+                def run_spectrum_analysis():
+                    """Run GPS spectrum analysis for jamming detection"""
+                    try:
+                        spectrum_script = os.path.join(SCRIPT_DIR, 'gps_spectrum_analyzer.py')
+                        if os.path.exists(spectrum_script):
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting spectrum analysis...")
+
+                            # Analyze first 10 seconds for quick results
+                            spectrum_output = filepath.replace('.dat', '_spectrum_analysis.json')
+                            spectrum_plot = filepath.replace('.dat', '_spectrum.png')
+
+                            subprocess.run([
+                                'python3', spectrum_script,
+                                filepath,
+                                '--duration', '10',
+                                '--output', spectrum_output,
+                                '--plot', spectrum_plot
+                            ], capture_output=True, text=True, timeout=60)
+
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Spectrum analysis complete: {spectrum_output}")
+                    except Exception as e:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Spectrum analysis error: {e}")
+
+                # Start spectrum analysis thread
+                spectrum_thread = threading.Thread(target=run_spectrum_analysis, daemon=True)
+                spectrum_thread.start()
 
                 self._set_headers()
                 self.wfile.write(json.dumps({
@@ -440,7 +585,9 @@ PVT.monitor_udp_port=1234
                     'expected_outputs': [
                         f"{output_basename}.nmea",
                         f"{output_basename}.kml",
-                        f"{output_basename}.gpx"
+                        f"{output_basename}.gpx",
+                        f"{output_basename}_spectrum_analysis.json",
+                        f"{output_basename}_spectrum.png"
                     ]
                 }).encode())
 

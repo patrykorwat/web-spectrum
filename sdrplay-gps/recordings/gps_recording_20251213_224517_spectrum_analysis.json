@@ -1,0 +1,46 @@
+{
+  "timestamp": "2025-12-13T23:11:20.856753",
+  "analysis": {
+    "sample_rate": 2048000.0,
+    "center_frequency": 1575420000.0,
+    "location": "Gda\u0144sk, Poland",
+    "threat_source": "Russian military (Kaliningrad, ~150-200 km)"
+  },
+  "detections": {
+    "sweep": {
+      "detected": false,
+      "confidence": 0.0,
+      "sweep_rate_hz_per_sec": -4512.554335804427,
+      "type": "LINEAR_SWEEP"
+    },
+    "pulse": {
+      "detected": true,
+      "confidence": 1.0,
+      "pulse_rate_hz": 10240.0,
+      "duty_cycle": 0.5,
+      "num_pulses": 204800,
+      "type": "PULSE_JAMMER"
+    },
+    "noise": {
+      "detected": true,
+      "confidence": 0.25479307770729065,
+      "noise_floor_db": -108.73222351074219,
+      "bandwidth_hz": 1697000.0,
+      "spectrum_flatness_db": 3.726034641265869,
+      "type": "BROADBAND_NOISE"
+    },
+    "meaconing": {
+      "detected": false,
+      "confidence": 0.0,
+      "num_signals": 0,
+      "signal_power_dbm": -56.62458038330078,
+      "doppler_variation_hz": 559888.5484054552,
+      "type": "MEACONING"
+    }
+  },
+  "summary": {
+    "jamming_detected": true,
+    "primary_threat": "pulse",
+    "max_confidence": 1.0
+  }
+}

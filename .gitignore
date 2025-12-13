@@ -163,8 +163,6 @@ __pycache__/
 *.gpx
 *.kml
 GSDR*
-gnss-sdr/recordings/*
-!gnss-sdr/recordings/.gitinit
 
 # SDRplay GPS runtime files
 sdrplay-gps/recordings/*.dat
@@ -180,3 +178,6 @@ sdrplay-gps/*.nmea
 sdrplay-gps/GSDR*
 sdrplay-gps/pvt.dat*
 sdrplay-gps/__pycache__/
+
+!sdrplay-gps/recordings/.gitkeep
+!sdrplay-gps/logs/.gitkeep
