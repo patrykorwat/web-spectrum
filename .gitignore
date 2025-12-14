@@ -165,13 +165,7 @@ __pycache__/
 GSDR*
 
 # SDRplay GPS runtime files
-sdrplay-gps/recordings/*.dat
-sdrplay-gps/recordings/*.conf
-sdrplay-gps/recordings/*.nmea
-sdrplay-gps/recordings/*.kml
-sdrplay-gps/recordings/*.gpx
-sdrplay-gps/recordings/*.geojson
-sdrplay-gps/recordings/*.xml
+sdrplay-gps/recordings/*
 sdrplay-gps/logs/*.log
 sdrplay-gps/*.xml
 sdrplay-gps/*.nmea

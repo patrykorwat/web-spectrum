@@ -58,10 +58,11 @@ class GPSSpectrumAnalyzer:
 
         # Read as complex64 (8 bytes per sample: 2x float32)
         # Skip initial samples by offsetting file pointer
+        read_count = -1  # -1 means read all samples
         if max_samples is not None:
-            max_samples += skip_samples  # Read extra to account for skip
+            read_count = max_samples + skip_samples  # Read extra to account for skip
 
-        samples = np.fromfile(filename, dtype=np.complex64, count=max_samples)
+        samples = np.fromfile(filename, dtype=np.complex64, count=read_count)
 
         # Skip initial samples
         if len(samples) > skip_samples:
@@ -93,7 +94,7 @@ class GPSSpectrumAnalyzer:
                 fs=self.sample_rate,
                 nperseg=nperseg,
                 noverlap=noverlap,
-                window='hann',
+                window='boxcar',  # Rectangular window for best narrow-line resolution
                 return_onesided=False
             )
             # Shift to center DC
@@ -282,9 +283,90 @@ class GPSSpectrumAnalyzer:
             'type': 'BROADBAND_NOISE'
         }
 
+    def detect_narrowband_signals(self, f, t, Sxx_db):
+        """Detect narrow-band continuous wave (CW) signals (50-500 Hz wide)"""
+        print("\n[4/5] Detecting NARROW-BAND SIGNALS...")
+
+        # Use MAXIMUM spectrum across time to catch intermittent narrow-band features
+        # This prevents time-averaging from washing out narrow lines
+        avg_spectrum = np.max(Sxx_db, axis=1)
+
+        print(f"  Using MAX across {len(t)} time bins (catches intermittent lines)")
+
+        # Calculate noise floor from average spectrum (not max)
+        mean_spectrum = np.mean(Sxx_db, axis=1)
+        noise_floor = np.percentile(mean_spectrum, 25)
+
+        # Find peaks above noise floor - LOWERED threshold for weak lines
+        threshold = noise_floor + 6  # 6 dB above noise floor (was 10 dB)
+
+        # Detect peaks using simple derivative method
+        peaks = []
+        for i in range(1, len(avg_spectrum) - 1):
+            if avg_spectrum[i] > threshold:
+                # Check if it's a local maximum
+                if avg_spectrum[i] > avg_spectrum[i-1] and avg_spectrum[i] > avg_spectrum[i+1]:
+                    # Estimate bandwidth by finding -3dB points
+                    peak_power = avg_spectrum[i]
+                    bw_threshold = peak_power - 3
+
+                    # Find left edge
+                    left_idx = i
+                    while left_idx > 0 and avg_spectrum[left_idx] > bw_threshold:
+                        left_idx -= 1
+
+                    # Find right edge
+                    right_idx = i
+                    while right_idx < len(avg_spectrum) - 1 and avg_spectrum[right_idx] > bw_threshold:
+                        right_idx += 1
+
+                    # Calculate bandwidth
+                    freq_res = f[1] - f[0]
+                    bandwidth_hz = (right_idx - left_idx) * freq_res
+
+                    # Only consider narrow-band signals (30 Hz to 2 kHz)
+                    # Accept very narrow lines down to 30 Hz (captures 50 Hz wide lines)
+                    if 30 < bandwidth_hz < 2000:
+                        peaks.append({
+                            'freq_hz': float(f[i]),
+                            'freq_mhz': float(f[i] / 1e6),
+                            'power_db': float(avg_spectrum[i]),
+                            'bandwidth_hz': float(bandwidth_hz),
+                            'snr_db': float(avg_spectrum[i] - noise_floor)
+                        })
+
+        # Sort by power
+        peaks.sort(key=lambda x: x['power_db'], reverse=True)
+
+        # Keep top 50 strongest peaks (increased to capture more narrow lines)
+        peaks = peaks[:50]
+
+        detected = len(peaks) > 0
+        confidence = min(len(peaks) / 10.0, 1.0) if detected else 0.0
+
+        if detected:
+            print(f"  ✓ NARROW-BAND SIGNALS DETECTED: {len(peaks)} lines")
+            print(f"    Confidence: {confidence * 100:.1f}%")
+            for i, peak in enumerate(peaks[:5], 1):  # Show top 5
+                print(f"    #{i}: {peak['freq_mhz']:+.6f} MHz, "
+                      f"BW={peak['bandwidth_hz']:.0f} Hz, "
+                      f"SNR={peak['snr_db']:.1f} dB")
+            if len(peaks) > 5:
+                print(f"    ... and {len(peaks) - 5} more")
+        else:
+            print(f"  ✗ No narrow-band signals detected")
+
+        return {
+            'detected': bool(detected),
+            'confidence': float(confidence),
+            'num_signals': len(peaks),
+            'peaks': peaks,
+            'type': 'NARROWBAND_CW'
+        }
+
     def detect_meaconing(self, samples, f, t, Sxx_db):
         """Detect meaconing (GPS signal spoofing)"""
-        print("\n[4/4] Detecting MEACONING/SPOOFING...")
+        print("\n[5/5] Detecting MEACONING/SPOOFING...")
 
         # Meaconing characteristics:
         # 1. Unusually strong signals (-100 dBm vs normal -130 dBm)
@@ -380,14 +462,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Analyze full recording
-  python3 gps_spectrum_analyzer.py recording.dat
+  # Using suffix (auto-finds file in recordings/)
+  python3 gps_spectrum_analyzer.py --suffix 20251213_231434 --duration 10 --plot out.png
 
-  # Quick analysis (first 10 seconds)
+  # Using full file path
   python3 gps_spectrum_analyzer.py recording.dat --duration 10
 
-  # Save plots
-  python3 gps_spectrum_analyzer.py recording.dat --plot output.png
+  # Quick analysis with suffix
+  python3 gps_spectrum_analyzer.py -s 20251213_231434 -d 10 -p output.png
 
 Detection capabilities:
   ✓ Sweep jammers (Russian R-934BMV)
@@ -397,7 +479,8 @@ Detection capabilities:
         """
     )
 
-    parser.add_argument('input_file', help='GPS IQ recording file (.dat)')
+    parser.add_argument('input_file', nargs='?', help='GPS IQ recording file (.dat)')
+    parser.add_argument('-s', '--suffix', type=str, help='Suffix for .dat file in recordings/ directory (e.g., "20251213_231434" for gps_recording_20251213_231434.dat)')
     parser.add_argument('-d', '--duration', type=float, help='Analyze first N seconds')
     parser.add_argument('-p', '--plot', type=str, help='Save spectrum plot to file')
     parser.add_argument('-o', '--output', type=str, help='JSON report output path')
@@ -405,14 +488,24 @@ Detection capabilities:
 
     args = parser.parse_args()
 
-    if not os.path.exists(args.input_file):
-        print(f"Error: File not found: {args.input_file}")
+    # Determine input file path
+    if args.suffix:
+        # Construct path from suffix
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        input_file = os.path.join(script_dir, 'recordings', f'gps_recording_{args.suffix}.dat')
+    elif args.input_file:
+        input_file = args.input_file
+    else:
+        parser.error("Either input_file or --suffix must be provided")
+
+    if not os.path.exists(input_file):
+        print(f"Error: File not found: {input_file}")
         sys.exit(1)
 
     print("=" * 70)
     print("GPS SPECTRUM ANALYZER - JAMMING DETECTION")
     print("=" * 70)
-    print(f"\nInput: {args.input_file}")
+    print(f"\nInput: {input_file}")
     print(f"Location context: Gdańsk, Poland")
     print(f"Known threat: Russian jamming from Kaliningrad (~150-200 km)")
     print("")
@@ -425,23 +518,25 @@ Detection capabilities:
     if args.duration:
         max_samples = int(args.duration * args.sample_rate)
 
-    samples = analyzer.load_samples(args.input_file, max_samples)
+    samples = analyzer.load_samples(input_file, max_samples)
 
-    # Compute spectrogram with very high frequency resolution
-    # Use large FFT to resolve ~300 Hz wide GPS spectral lines
-    # nperseg=65536 gives ~31 Hz bins (2.048 MHz / 65536)
-    # This allows clear resolution of individual GPS signals
-    f, t, Sxx_db = analyzer.compute_spectrogram(samples, nperseg=65536)
+    # Compute spectrogram optimized for narrowband high-resolution view
+    # nperseg=16384 gives ~125 Hz bins (2.048 MHz / 16384) - good frequency resolution
+    # noverlap=14336 (87.5% overlap) gives smooth time resolution with faster processing
+    # Hop size = 2048 samples = 1ms time steps - balanced quality and speed
+    # Optimized for 3-minute rendering time
+    f, t, Sxx_db = analyzer.compute_spectrogram(samples, nperseg=16384, noverlap=14336)
 
     # Run all detections
     results = {}
     results['sweep'] = analyzer.detect_sweep_jammer(f, t, Sxx_db)
     results['pulse'] = analyzer.detect_pulse_jammer(samples)
     results['noise'] = analyzer.detect_noise_jammer(samples)
+    results['narrowband'] = analyzer.detect_narrowband_signals(f, t, Sxx_db)
     results['meaconing'] = analyzer.detect_meaconing(samples, f, t, Sxx_db)
 
     # Generate report
-    output_path = args.output or args.input_file.replace('.dat', '_spectrum_analysis.json')
+    output_path = args.output or input_file.replace('.dat', '_spectrum_analysis.json')
     report = analyzer.generate_report(results, output_path)
 
     # Print summary
@@ -462,35 +557,131 @@ Detection capabilities:
     # Generate plot if requested
     if args.plot and PLOTTING_AVAILABLE:
         print(f"\nGenerating spectrum plot...")
-        plot_spectrum(f, t, Sxx_db, results, args.plot)
+        plot_spectrum(f, t, Sxx_db, results, args.plot, analyzer.sample_rate)
         print(f"✓ Plot saved: {args.plot}")
+
+        # Also generate narrowband zoom plot (center +200 kHz ±100 kHz = 200 kHz total, 5 seconds)
+        narrowband_plot = args.plot.replace('.png', '_narrowband.png')
+        plot_narrowband_zoom(f, t, Sxx_db, narrowband_plot, zoom_bw=200e3, time_duration=5.0, freq_offset=200e3)
+        print(f"✓ Narrowband zoom plot saved: {narrowband_plot}")
 
     print("\n" + "=" * 70)
 
 
-def plot_spectrum(f, t, Sxx_db, results, output_path):
+def plot_narrowband_zoom(f, t, Sxx_db, output_path, zoom_bw=200e3, time_duration=None, freq_offset=0):
+    """Generate narrowband zoom plot (like SDRconnect zoomed view)"""
+    print(f"\nGenerating narrowband zoom plot (±{zoom_bw/2e3:.0f} kHz, offset: {freq_offset/1e3:.0f} kHz)...")
+
+    # Find frequency indices for zoom region (center + offset ±zoom_bw/2)
+    center_idx = len(f) // 2
+    # Apply frequency offset
+    offset_bins = int(freq_offset / (f[1] - f[0]))
+    center_idx += offset_bins
+
+    bw_bins = int(zoom_bw / (f[1] - f[0]))
+    start_idx = max(0, center_idx - bw_bins // 2)
+    end_idx = min(len(f), center_idx + bw_bins // 2)
+
+    # Crop to narrowband region
+    f_zoom = f[start_idx:end_idx]
+    Sxx_zoom = Sxx_db[start_idx:end_idx, :]
+
+    # Optionally crop time axis to specific duration
+    if time_duration is not None and len(t) > 0:
+        max_time = min(time_duration, t[-1])
+        time_mask = t <= max_time
+        t_zoom = t[time_mask]
+        Sxx_zoom = Sxx_zoom[:, time_mask]
+        print(f"  Time cropped to {max_time:.1f} seconds ({len(t_zoom)} bins)")
+    else:
+        t_zoom = t
+
+    # Enhanced contrast for subtle line visibility
+    # Narrow dynamic range to emphasize weak spectral lines
+    vmin = np.percentile(Sxx_zoom, 60)  # Higher floor to suppress noise
+    vmax = vmin + 8  # Very narrow 8 dB range to highlight subtle features
+
+    print(f"  Zoomed region: {f_zoom[0]/1e3:.1f} to {f_zoom[-1]/1e3:.1f} kHz")
+    print(f"  Frequency bins: {len(f_zoom)}")
+    print(f"  Time bins: {len(t_zoom)}")
+    print(f"  Time span: {t_zoom[-1] if len(t_zoom) > 0 else 0:.1f} seconds")
+    print(f"  Dynamic range: {vmin:.1f} to {vmax:.1f} dB")
+    print(f"  Frequency resolution: {f[1]-f[0]:.1f} Hz/bin")
+
+    # Create high-quality plot optimized for fast rendering
+    fig, ax = plt.subplots(figsize=(20, 12), dpi=150)
+
+    # Dark background for better contrast with colorful spectrum
+    fig.patch.set_facecolor('#0a0a0a')
+    ax.set_facecolor('#1a1a1a')
+
+    # Use 'gouraud' shading for smooth, anti-aliased appearance (no pixelation)
+    # This interpolates between data points for a continuous look
+    # Use 'viridis' colormap - gentle, perceptually uniform, great for subtle features
+    # Dark blue background shows noise floor, bright yellow highlights lines
+    im = ax.pcolormesh(t_zoom, f_zoom / 1e3, Sxx_zoom, shading='gouraud',
+                       cmap='viridis', vmin=vmin, vmax=vmax, rasterized=False)
+
+    ax.set_ylabel('Frequency offset (kHz)', fontsize=14, fontweight='bold', color='white')
+    ax.set_xlabel('Time (s)', fontsize=14, fontweight='bold', color='white')
+    time_duration_str = f"{t_zoom[-1]:.1f}s" if len(t_zoom) > 0 else "N/A"
+    offset_str = f"+{freq_offset/1e3:.0f} kHz " if freq_offset != 0 else ""
+    ax.set_title(f'Narrowband Zoom: {offset_str}±{zoom_bw/2e3:.0f} kHz | {time_duration_str} | Resolution: {f[1]-f[0]:.1f} Hz/bin | {len(t_zoom)} time bins',
+                 fontsize=16, fontweight='bold', color='white')
+
+    # Style axes for dark theme
+    ax.tick_params(colors='white', which='both')
+    ax.spines['bottom'].set_color('white')
+    ax.spines['top'].set_color('white')
+    ax.spines['left'].set_color('white')
+    ax.spines['right'].set_color('white')
+
+    # Add grid for easier line tracking
+    ax.grid(True, alpha=0.3, color='white', linestyle='--', linewidth=0.5)
+
+    cbar = plt.colorbar(im, ax=ax, label='Power (dB)')
+    cbar.set_label('Power (dB)', fontsize=12, fontweight='bold', color='white')
+    cbar.ax.tick_params(colors='white')
+    cbar.outline.set_edgecolor('white')
+
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved smooth narrowband plot with {len(f_zoom)} freq bins × {len(t_zoom)} time bins")
+
+
+def plot_spectrum(f, t, Sxx_db, results, output_path, sample_rate=2048000):
     """Generate comprehensive spectrum analysis plot"""
-    # Downsample spectrogram for faster plotting (keep every Nth point)
-    downsample_factor = max(1, len(t) // 1000)  # Max 1000 time bins for full width
-    t_ds = t[::downsample_factor]
-    Sxx_db_ds = Sxx_db[:, ::downsample_factor]
+    # NO downsampling - preserve all spectral detail!
+    # High resolution is crucial for seeing ~300 Hz wide spectral lines
+    print(f"\nGenerating plot with FULL resolution: {len(t)} time bins × {len(f)} frequency bins...")
 
-    print(f"\nGenerating plot (downsampled {len(t)} → {len(t_ds)} time bins)...")
+    # IMPROVED dynamic range for narrow-band signal visibility
+    # Use percentile-based scaling to suppress noise and highlight lines
+    noise_floor = np.percentile(Sxx_db, 25)  # 25th percentile = noise floor
+    signal_peak = np.percentile(Sxx_db, 99.9)  # 99.9th percentile = peak signals
 
-    # Improve dynamic range for better visibility of spectral lines
-    # Clip to percentile range to avoid outliers compressing the scale
-    vmin = np.percentile(Sxx_db_ds, 5)  # 5th percentile
-    vmax = np.percentile(Sxx_db_ds, 99.5)  # 99.5th percentile
+    # Balanced dynamic range to show both strong and weak lines
+    # Start from 40th percentile to suppress some noise but keep weak signals
+    # This reveals more narrow lines while maintaining good contrast
+    vmin = np.percentile(Sxx_db, 40)  # Moderate noise suppression
+    vmax = vmin + 25  # 25 dB range for balanced visibility
 
-    # Create full-width figure with spectrogram on top
-    fig = plt.figure(figsize=(16, 10))
-    gs = GridSpec(4, 1, figure=fig, hspace=0.25, height_ratios=[3, 1, 1, 0.8])
+    print(f"  Dynamic range: {vmin:.1f} to {vmax:.1f} dB ({vmax-vmin:.1f} dB span)")
+    print(f"  Noise floor (25th percentile): {noise_floor:.1f} dB")
+    print(f"  Peak signal (99.9th percentile): {signal_peak:.1f} dB")
+
+    # Create EXTRA large figure for maximum detail
+    # Large DPI ensures all frequency bins are visible
+    fig = plt.figure(figsize=(24, 16), dpi=300)
+    gs = GridSpec(4, 1, figure=fig, hspace=0.25, height_ratios=[6, 1, 1, 0.5])
 
     # Main spectrogram - FULL WIDTH with time horizontal
     ax1 = fig.add_subplot(gs[0, 0])
-    # Use 'turbo' colormap for better visibility of spectral lines
-    im = ax1.pcolormesh(t_ds, f / 1e6, Sxx_db_ds, shading='nearest',
-                        cmap='turbo', vmin=vmin, vmax=vmax, rasterized=True)
+    # Use 'hot' colormap - high contrast for narrow-band line visibility
+    # Dark background with bright lines (like SDRconnect/GQRX)
+    # Use 'auto' shading for best rendering (interpolates if data is dense enough)
+    im = ax1.pcolormesh(t, f / 1e6, Sxx_db, shading='auto',
+                        cmap='hot', vmin=vmin, vmax=vmax, rasterized=True)
     ax1.set_ylabel('Frequency offset (MHz)', fontsize=11)
     ax1.set_xlabel('Time (s)', fontsize=11)
     ax1.set_title(f'GPS L1 Spectrogram - Jamming Detection (Resolution: {f[1]-f[0]:.1f} Hz/bin)',
@@ -514,12 +705,26 @@ def plot_spectrum(f, t, Sxx_db, results, output_path):
     # Average spectrum - FULL WIDTH below spectrogram
     ax2 = fig.add_subplot(gs[1, 0])
     avg_spectrum = np.mean(Sxx_db, axis=1)
-    ax2.plot(f / 1e6, avg_spectrum, 'b-', linewidth=0.8)
+    ax2.plot(f / 1e6, avg_spectrum, 'b-', linewidth=0.8, label='Average spectrum')
+
+    # Highlight narrow-band signals if detected
+    if 'narrowband' in results and results['narrowband']['detected']:
+        peaks = results['narrowband']['peaks']
+        for peak in peaks[:10]:  # Show top 10 on plot
+            freq_mhz = peak['freq_mhz']
+            # Draw vertical line at peak frequency
+            ax2.axvline(freq_mhz, color='red', linestyle='--', linewidth=1, alpha=0.6)
+            # Annotate with bandwidth
+            ax2.text(freq_mhz, ax2.get_ylim()[1], f"{peak['bandwidth_hz']:.0f}Hz",
+                    rotation=90, fontsize=7, color='red', alpha=0.8,
+                    verticalalignment='top', horizontalalignment='right')
+
     ax2.set_ylabel('Power (dB)', fontsize=10)
     ax2.set_xlabel('Frequency offset (MHz)', fontsize=10)
-    ax2.set_title('Average Spectrum (time-averaged)', fontsize=11)
+    ax2.set_title('Average Spectrum (time-averaged) - Red lines: narrow-band signals', fontsize=11)
     ax2.grid(True, alpha=0.3)
     ax2.set_xlim(f[0] / 1e6, f[-1] / 1e6)
+    ax2.legend(fontsize=8, loc='upper right')
 
     # Time-domain power - FULL WIDTH
     ax3 = fig.add_subplot(gs[2, 0])
@@ -561,8 +766,10 @@ def plot_spectrum(f, t, Sxx_db, results, output_path):
             bbox=dict(boxstyle='round', facecolor='yellow' if metrics_lines else 'lightgreen', alpha=0.7),
             fontweight='bold')
 
-    plt.savefig(output_path, dpi=200, bbox_inches='tight')
+    # Save at 300 DPI to match figure DPI - preserves all detail
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
+    print(f"Saved high-resolution plot: {output_path}")
 
 
 if __name__ == '__main__':

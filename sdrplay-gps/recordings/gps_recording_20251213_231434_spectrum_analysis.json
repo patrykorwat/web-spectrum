@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-12-13T23:19:51.608698",
+  "timestamp": "2025-12-14T12:39:57.026433",
   "analysis": {
     "sample_rate": 2048000.0,
     "center_frequency": 1575420000.0,
@@ -8,9 +8,9 @@
   },
   "detections": {
     "sweep": {
-      "detected": true,
-      "confidence": 1.0,
-      "sweep_rate_hz_per_sec": -19004.781060094047,
+      "detected": false,
+      "confidence": 0.0,
+      "sweep_rate_hz_per_sec": -4571.14060545667,
       "type": "LINEAR_SWEEP"
     },
     "pulse": {
@@ -29,18 +29,376 @@
       "spectrum_flatness_db": 3.765197992324829,
       "type": "BROADBAND_NOISE"
     },
+    "narrowband": {
+      "detected": true,
+      "confidence": 1.0,
+      "num_signals": 50,
+      "peaks": [
+        {
+          "freq_hz": 125.0,
+          "freq_mhz": 0.000125,
+          "power_db": -88.419921875,
+          "bandwidth_hz": 375.0,
+          "snr_db": 22.63208770751953
+        },
+        {
+          "freq_hz": -125.0,
+          "freq_mhz": -0.000125,
+          "power_db": -88.59210968017578,
+          "bandwidth_hz": 250.0,
+          "snr_db": 22.45989990234375
+        },
+        {
+          "freq_hz": 576000.0,
+          "freq_mhz": 0.576,
+          "power_db": -88.72149658203125,
+          "bandwidth_hz": 250.0,
+          "snr_db": 22.33051300048828
+        },
+        {
+          "freq_hz": -576000.0,
+          "freq_mhz": -0.576,
+          "power_db": -89.419921875,
+          "bandwidth_hz": 250.0,
+          "snr_db": 21.63208770751953
+        },
+        {
+          "freq_hz": -151250.0,
+          "freq_mhz": -0.15125,
+          "power_db": -92.60910034179688,
+          "bandwidth_hz": 250.0,
+          "snr_db": 18.442909240722656
+        },
+        {
+          "freq_hz": -508750.0,
+          "freq_mhz": -0.50875,
+          "power_db": -92.72425842285156,
+          "bandwidth_hz": 250.0,
+          "snr_db": 18.32775115966797
+        },
+        {
+          "freq_hz": 121250.0,
+          "freq_mhz": 0.12125,
+          "power_db": -92.89710235595703,
+          "bandwidth_hz": 250.0,
+          "snr_db": 18.1549072265625
+        },
+        {
+          "freq_hz": 120750.0,
+          "freq_mhz": 0.12075,
+          "power_db": -92.9494857788086,
+          "bandwidth_hz": 250.0,
+          "snr_db": 18.102523803710938
+        },
+        {
+          "freq_hz": 54750.0,
+          "freq_mhz": 0.05475,
+          "power_db": -92.97773742675781,
+          "bandwidth_hz": 250.0,
+          "snr_db": 18.07427215576172
+        },
+        {
+          "freq_hz": -65750.0,
+          "freq_mhz": -0.06575,
+          "power_db": -92.98703002929688,
+          "bandwidth_hz": 375.0,
+          "snr_db": 18.064979553222656
+        },
+        {
+          "freq_hz": 636000.0,
+          "freq_mhz": 0.636,
+          "power_db": -93.00533294677734,
+          "bandwidth_hz": 250.0,
+          "snr_db": 18.046676635742188
+        },
+        {
+          "freq_hz": 121500.0,
+          "freq_mhz": 0.1215,
+          "power_db": -93.22021484375,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.83179473876953
+        },
+        {
+          "freq_hz": -120750.0,
+          "freq_mhz": -0.12075,
+          "power_db": -93.30352020263672,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.748489379882812
+        },
+        {
+          "freq_hz": -750.0,
+          "freq_mhz": -0.00075,
+          "power_db": -93.36802673339844,
+          "bandwidth_hz": 1625.0,
+          "snr_db": 17.683982849121094
+        },
+        {
+          "freq_hz": -66250.0,
+          "freq_mhz": -0.06625,
+          "power_db": -93.41458129882812,
+          "bandwidth_hz": 500.0,
+          "snr_db": 17.637428283691406
+        },
+        {
+          "freq_hz": 66250.0,
+          "freq_mhz": 0.06625,
+          "power_db": -93.43621826171875,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.61579132080078
+        },
+        {
+          "freq_hz": 214500.0,
+          "freq_mhz": 0.2145,
+          "power_db": -93.46221160888672,
+          "bandwidth_hz": 500.0,
+          "snr_db": 17.589797973632812
+        },
+        {
+          "freq_hz": 370750.0,
+          "freq_mhz": 0.37075,
+          "power_db": -93.46843719482422,
+          "bandwidth_hz": 375.0,
+          "snr_db": 17.583572387695312
+        },
+        {
+          "freq_hz": 294750.0,
+          "freq_mhz": 0.29475,
+          "power_db": -93.47598266601562,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.576026916503906
+        },
+        {
+          "freq_hz": -493000.0,
+          "freq_mhz": -0.493,
+          "power_db": -93.5958480834961,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.456161499023438
+        },
+        {
+          "freq_hz": 467500.0,
+          "freq_mhz": 0.4675,
+          "power_db": -93.62647247314453,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.425537109375
+        },
+        {
+          "freq_hz": -325750.0,
+          "freq_mhz": -0.32575,
+          "power_db": -93.64595031738281,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.40605926513672
+        },
+        {
+          "freq_hz": 476250.0,
+          "freq_mhz": 0.47625,
+          "power_db": -93.6551742553711,
+          "bandwidth_hz": 375.0,
+          "snr_db": 17.396835327148438
+        },
+        {
+          "freq_hz": -498750.0,
+          "freq_mhz": -0.49875,
+          "power_db": -93.65518188476562,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.396827697753906
+        },
+        {
+          "freq_hz": -184750.0,
+          "freq_mhz": -0.18475,
+          "power_db": -93.7122802734375,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.33972930908203
+        },
+        {
+          "freq_hz": 65750.0,
+          "freq_mhz": 0.06575,
+          "power_db": -93.72917938232422,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.322830200195312
+        },
+        {
+          "freq_hz": -341750.0,
+          "freq_mhz": -0.34175,
+          "power_db": -93.75659942626953,
+          "bandwidth_hz": 375.0,
+          "snr_db": 17.29541015625
+        },
+        {
+          "freq_hz": 382750.0,
+          "freq_mhz": 0.38275,
+          "power_db": -93.81523895263672,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.236770629882812
+        },
+        {
+          "freq_hz": -453250.0,
+          "freq_mhz": -0.45325,
+          "power_db": -93.83831787109375,
+          "bandwidth_hz": 500.0,
+          "snr_db": 17.21369171142578
+        },
+        {
+          "freq_hz": 317250.0,
+          "freq_mhz": 0.31725,
+          "power_db": -93.84310913085938,
+          "bandwidth_hz": 500.0,
+          "snr_db": 17.208900451660156
+        },
+        {
+          "freq_hz": -636000.0,
+          "freq_mhz": -0.636,
+          "power_db": -93.8491439819336,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.202865600585938
+        },
+        {
+          "freq_hz": -121500.0,
+          "freq_mhz": -0.1215,
+          "power_db": -93.8707046508789,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.181304931640625
+        },
+        {
+          "freq_hz": 371250.0,
+          "freq_mhz": 0.37125,
+          "power_db": -93.93660736083984,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.115402221679688
+        },
+        {
+          "freq_hz": 339500.0,
+          "freq_mhz": 0.3395,
+          "power_db": -93.99974822998047,
+          "bandwidth_hz": 250.0,
+          "snr_db": 17.052261352539062
+        },
+        {
+          "freq_hz": 519375.0,
+          "freq_mhz": 0.519375,
+          "power_db": -94.05738067626953,
+          "bandwidth_hz": 625.0,
+          "snr_db": 16.99462890625
+        },
+        {
+          "freq_hz": -646875.0,
+          "freq_mhz": -0.646875,
+          "power_db": -94.06058502197266,
+          "bandwidth_hz": 250.0,
+          "snr_db": 16.991424560546875
+        },
+        {
+          "freq_hz": -32500.0,
+          "freq_mhz": -0.0325,
+          "power_db": -94.06317138671875,
+          "bandwidth_hz": 250.0,
+          "snr_db": 16.98883819580078
+        },
+        {
+          "freq_hz": -451375.0,
+          "freq_mhz": -0.451375,
+          "power_db": -94.06509399414062,
+          "bandwidth_hz": 375.0,
+          "snr_db": 16.986915588378906
+        },
+        {
+          "freq_hz": 183750.0,
+          "freq_mhz": 0.18375,
+          "power_db": -94.08390808105469,
+          "bandwidth_hz": 625.0,
+          "snr_db": 16.968101501464844
+        },
+        {
+          "freq_hz": 23750.0,
+          "freq_mhz": 0.02375,
+          "power_db": -94.08586120605469,
+          "bandwidth_hz": 250.0,
+          "snr_db": 16.966148376464844
+        },
+        {
+          "freq_hz": -449000.0,
+          "freq_mhz": -0.449,
+          "power_db": -94.11021423339844,
+          "bandwidth_hz": 500.0,
+          "snr_db": 16.941795349121094
+        },
+        {
+          "freq_hz": -12250.0,
+          "freq_mhz": -0.01225,
+          "power_db": -94.13200378417969,
+          "bandwidth_hz": 500.0,
+          "snr_db": 16.920005798339844
+        },
+        {
+          "freq_hz": 246000.0,
+          "freq_mhz": 0.246,
+          "power_db": -94.1574935913086,
+          "bandwidth_hz": 375.0,
+          "snr_db": 16.894515991210938
+        },
+        {
+          "freq_hz": 68250.0,
+          "freq_mhz": 0.06825,
+          "power_db": -94.21636962890625,
+          "bandwidth_hz": 250.0,
+          "snr_db": 16.83563995361328
+        },
+        {
+          "freq_hz": -733500.0,
+          "freq_mhz": -0.7335,
+          "power_db": -94.23824310302734,
+          "bandwidth_hz": 250.0,
+          "snr_db": 16.813766479492188
+        },
+        {
+          "freq_hz": -728125.0,
+          "freq_mhz": -0.728125,
+          "power_db": -94.23950958251953,
+          "bandwidth_hz": 875.0,
+          "snr_db": 16.8125
+        },
+        {
+          "freq_hz": 184250.0,
+          "freq_mhz": 0.18425,
+          "power_db": -94.24327850341797,
+          "bandwidth_hz": 375.0,
+          "snr_db": 16.808731079101562
+        },
+        {
+          "freq_hz": 508750.0,
+          "freq_mhz": 0.50875,
+          "power_db": -94.2507553100586,
+          "bandwidth_hz": 250.0,
+          "snr_db": 16.801254272460938
+        },
+        {
+          "freq_hz": -400625.0,
+          "freq_mhz": -0.400625,
+          "power_db": -94.26678466796875,
+          "bandwidth_hz": 375.0,
+          "snr_db": 16.78522491455078
+        },
+        {
+          "freq_hz": -121250.0,
+          "freq_mhz": -0.12125,
+          "power_db": -94.31684875488281,
+          "bandwidth_hz": 500.0,
+          "snr_db": 16.73516082763672
+        }
+      ],
+      "type": "NARROWBAND_CW"
+    },
     "meaconing": {
       "detected": false,
       "confidence": 0.0,
       "num_signals": 0,
       "signal_power_dbm": -56.46940231323242,
-      "doppler_variation_hz": 562275.9933432937,
+      "doppler_variation_hz": 566542.4697923904,
       "type": "MEACONING"
     }
   },
   "summary": {
     "jamming_detected": true,
-    "primary_threat": "sweep",
+    "primary_threat": "pulse",
     "max_confidence": 1.0
   }
 }
