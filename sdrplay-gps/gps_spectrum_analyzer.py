@@ -44,10 +44,10 @@ except ImportError:
 class GPSSpectrumAnalyzer:
     """Analyzes GPS IQ samples for jamming signatures"""
 
-    def __init__(self, sample_rate=10000000):  # Default to 10 MSPS for full spectrum
+    def __init__(self, sample_rate=2048000):  # Default to 2.048 MSPS for GPS L1 main lobe
         self.sample_rate = sample_rate
         self.center_freq = 1575.42e6  # GPS L1
-        self.gps_bandwidth = 15.345e6  # GPS L1 C/A full bandwidth (±7.67 MHz from center)
+        self.gps_bandwidth = 2.046e6  # GPS L1 C/A main lobe (±1.023 MHz from center)
 
     def load_samples(self, filename, max_samples=None, skip_seconds=0.3):
         """Load complex64 IQ samples from file"""
@@ -513,7 +513,7 @@ Detection capabilities:
     parser.add_argument('-d', '--duration', type=float, help='Analyze first N seconds')
     parser.add_argument('-p', '--plot', type=str, help='Save spectrum plot to file')
     parser.add_argument('-o', '--output', type=str, help='JSON report output path')
-    parser.add_argument('--sample-rate', type=float, default=10e6, help='Sample rate (default: 10 MSPS for 8 MHz bandwidth recordings)')
+    parser.add_argument('--sample-rate', type=float, default=2.048e6, help='Sample rate (default: 2.048 MSPS for GPS L1 main lobe)')
 
     args = parser.parse_args()
 
@@ -550,14 +550,16 @@ Detection capabilities:
     samples = analyzer.load_samples(input_file, max_samples)
 
     # Compute spectrogram optimized for 10 MSPS data with multi-core processing
-    # nperseg=8192 gives ~1.22 kHz bins (10 MHz / 8192) - good frequency resolution
-    # noverlap=6144 (75% overlap) gives smooth time resolution with faster processing
-    # Hop size = 2048 samples = 0.2ms time steps - fast processing, good quality
+    # MEMORY-OPTIMIZED SETTINGS for 60-second recordings:
+    # nperseg=2048 gives ~4.88 kHz bins (10 MHz / 2048) - adequate frequency resolution
+    # noverlap=1024 (50% overlap) gives smooth time resolution with LOW memory usage
+    # Hop size = 1024 samples = 0.1ms time steps - fast processing, good quality
+    # 60 seconds = 600M samples ÷ 1024 hop × 2048 FFT = ~117 MB (vs 960 MB with old settings!)
     # Multi-core FFT processing enabled (uses all CPU cores)
     print(f"\n{'='*70}")
-    print(f"STARTING PARALLEL SPECTROGRAM COMPUTATION")
+    print(f"STARTING PARALLEL SPECTROGRAM COMPUTATION (MEMORY-OPTIMIZED)")
     print(f"{'='*70}")
-    f, t, Sxx_db = analyzer.compute_spectrogram(samples, nperseg=8192, noverlap=6144, n_jobs=-1)
+    f, t, Sxx_db = analyzer.compute_spectrogram(samples, nperseg=2048, noverlap=1024, n_jobs=-1)
 
     # Run all detections
     results = {}
@@ -595,9 +597,9 @@ Detection capabilities:
             # Show GPS L1 C/A main lobe: ±1.023 MHz (2.046 MHz total bandwidth)
             # This includes: spectrogram + average spectrum + average power vs time (3-panel view)
 
-            # Generate main lobe plot: ±1.023 MHz centered at DC (no offset), 12 seconds max
+            # Generate main lobe plot: ±1.023 MHz centered at DC (no offset), show all time
             plot_narrowband_zoom(f, t, Sxx_db, args.plot,
-                               zoom_bw=2.046e6, freq_offset=0, time_duration=12.0)
+                               zoom_bw=2.046e6, freq_offset=0, time_duration=None)
             print(f"✓ GPS main lobe plot saved: {args.plot}")
             print(f"  (Skipped full spectrum plot for faster processing)")
         except Exception as e:
@@ -635,6 +637,15 @@ def plot_narrowband_zoom(f, t, Sxx_db, output_path, zoom_bw=200e3, time_duration
         print(f"  Time cropped to {max_time:.1f} seconds ({len(t_zoom)} bins)")
     else:
         t_zoom = t
+
+    # Decimate time axis if too many bins (speeds up plotting dramatically!)
+    # Matplotlib struggles with >10k time bins - downsample to ~2000 bins max
+    max_plot_bins = 2000
+    if len(t_zoom) > max_plot_bins:
+        decimate_factor = len(t_zoom) // max_plot_bins
+        t_zoom = t_zoom[::decimate_factor]
+        Sxx_zoom = Sxx_zoom[:, ::decimate_factor]
+        print(f"  Decimated time axis by {decimate_factor}× to {len(t_zoom)} bins for faster plotting")
 
     # Enhanced contrast for subtle line visibility
     # Narrow dynamic range to emphasize weak spectral lines

@@ -206,6 +206,10 @@ function SdrPlayDecoder() {
       setProgressPercent(0);
       setProgressMessage('Starting GPS data recording...');
 
+      // Reset spectrum analysis state for new recording
+      setSpectrumAnalysis(null);
+      setSpectrumImageUrl(null);
+
       const response = await fetch('http://localhost:3001/gnss/start-recording', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -337,7 +341,8 @@ function SdrPlayDecoder() {
                   if (data) {
                     console.log('Spectrum analysis loaded during processing:', data);
                     setSpectrumAnalysis(data);
-                    const imageUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}`;
+                    // Add timestamp to prevent browser caching
+                    const imageUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}?t=${Date.now()}`;
                     setSpectrumImageUrl(imageUrl);
                     console.log('Spectrum image URL set:', imageUrl);
                   }
@@ -361,7 +366,8 @@ function SdrPlayDecoder() {
                     if (data) {
                       console.log('Spectrum analysis loaded after completion:', data);
                       setSpectrumAnalysis(data);
-                      const imageUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}`;
+                      // Add timestamp to prevent browser caching
+                      const imageUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}?t=${Date.now()}`;
                       setSpectrumImageUrl(imageUrl);
                       console.log('Spectrum image URL set:', imageUrl);
                     } else if (retries < 10) {
@@ -1059,11 +1065,15 @@ return (
                   GPS L1 Main Lobe Spectrum (±1.023 MHz) - Multi-core Optimized
                 </Typography>
                 <img
+                  key={spectrumImageUrl}
                   src={spectrumImageUrl}
                   alt="GPS L1 Main Lobe Spectrum Analysis"
                   style={{ width: '100%', maxWidth: '900px', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '4px' }}
+                  onLoad={() => {
+                    console.log('Spectrum image loaded successfully:', spectrumImageUrl);
+                  }}
                   onError={(e) => {
-                    console.log('Spectrum image failed to load');
+                    console.error('Spectrum image failed to load:', spectrumImageUrl);
                     e.currentTarget.style.display = 'none';
                   }}
                 />

@@ -31,15 +31,15 @@ RECORDINGS_DIR = os.path.join(SCRIPT_DIR, "recordings")
 RECORDING_CONFIG = {
     'frequency': 1575420000,  # Hz (GPS L1 center: 1575.42 MHz)
     'frequency_mhz': 1575.42,  # MHz
-    'sample_rate': 10000000,  # Hz - 10 MSPS (max stable rate for SDRplay)
-    'sample_rate_msps': 10.0,  # MSPS
+    'sample_rate': 2048000,  # Hz - 2.048 MSPS (optimized for GPS L1 main lobe)
+    'sample_rate_msps': 2.048,  # MSPS
     'gain_reduction': 30,  # dB - CRITICAL: Lower gain prevents thermal shutdown!
     'actual_gain': 29,  # dB (59 - gain_reduction) - Tested: 5 min recording stable
-    'bandwidth_mhz': 8.0,  # MHz - Maximum SDRplay bandwidth (captures ~52% of GPS signal)
+    'bandwidth_mhz': 1.536,  # MHz - Captures GPS L1 main lobe (±1.023 MHz = 2.046 MHz)
     'format': 'Complex64 (IQ)',
     'duration_default': 300,  # seconds (5 minutes)
-    'file_size_per_min_mb': 4800,  # MB per minute (10 MSPS * 60s * 8 bytes)
-    'expected_size_5min_gb': 24.0,  # GB for 5 minutes (WARNING: Very large files!)
+    'file_size_per_min_mb': 983,  # MB per minute (2.048 MSPS * 60s * 8 bytes)
+    'expected_size_5min_gb': 4.9,  # GB for 5 minutes (5× smaller than 10 MSPS!)
     'tuner': 2,  # RSPduo tuner: 1 (Tuner A) or 2 (Tuner B) - SET THIS TO YOUR ANTENNA PORT!
     'bias_tee': 'ENABLED'  # Bias-T for active antenna power
 }
@@ -387,14 +387,14 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
                     # Fallback to hardcoded config if template doesn't exist
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] Template not found, using default config")
                     config_content = f"""; GNSS-SDR Configuration (Auto-generated)
-; 10 MSPS sample rate for full 8 MHz bandwidth
+; 2.048 MSPS sample rate for GPS L1 main lobe
 [GNSS-SDR]
-GNSS-SDR.internal_fs_sps=10000000
+GNSS-SDR.internal_fs_sps=2048000
 
 SignalSource.implementation=File_Signal_Source
 SignalSource.filename={filepath}
 SignalSource.item_type=gr_complex
-SignalSource.sampling_frequency=10000000
+SignalSource.sampling_frequency=2048000
 SignalSource.freq=1575420000
 SignalSource.samples=0
 SignalSource.repeat=false
@@ -561,18 +561,20 @@ PVT.monitor_udp_port=1234
                         if os.path.exists(spectrum_script):
                             print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting spectrum analysis...")
 
-                            # Analyze first 1 second for quick results (10 MSPS = 10M samples = large data!)
-                            # 3 seconds was too much memory (4+ GB) and took too long
+                            # Analyze first 60 seconds with 2.048 MSPS (5× less data than 10 MSPS!)
+                            # At 2.048 MSPS: 60s = 122M samples (vs 600M at 10 MSPS)
+                            # Memory: FFT=2048, overlap=50% = ~24 MB (vs 117 MB at 10 MSPS)
+                            # Processing time: Expected ~2-3 min for full minute
                             spectrum_output = filepath.replace('.dat', '_spectrum_analysis.json')
                             spectrum_plot = filepath.replace('.dat', '_spectrum.png')
 
                             result = subprocess.run([
                                 'python3', spectrum_script,
                                 filepath,
-                                '--duration', '1',
+                                '--duration', '60',
                                 '--output', spectrum_output,
                                 '--plot', spectrum_plot
-                            ], capture_output=True, text=True, timeout=180)  # 3 min timeout
+                            ], capture_output=True, text=True, timeout=300)  # 5 min timeout
 
                             # Log any errors
                             if result.returncode != 0:

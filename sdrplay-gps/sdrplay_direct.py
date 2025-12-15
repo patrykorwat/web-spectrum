@@ -789,9 +789,12 @@ class SDRplayDevice:
         rx_params.tunerParams.rfFreq.rfHz = 1575420000.0  # GPS L1 frequency
         rx_params.tunerParams.rfFreq.syncUpdate = 0
 
-        # Set bandwidth and IF mode - Use MAXIMUM 8 MHz for full GPS L1 spectrum capture
-        # GPS L1 C/A uses 15.345 MHz total bandwidth, but SDRplay max is 8 MHz
-        rx_params.tunerParams.bwType = sdrplay_api_Bw_MHzT.BW_8_000  # Maximum bandwidth
+        # Set bandwidth and IF mode - Use 1.536 MHz for GPS L1 MAIN LOBE capture
+        # GPS L1 C/A main lobe: ±1.023 MHz = 2.046 MHz total
+        # Using 1.536 MHz bandwidth (slightly narrower than ideal, but closest available)
+        # This will capture ~75% of main lobe power (acceptable trade-off for speed)
+        # Combined with 2.048 MSPS sample rate = 5× faster than 10 MSPS!
+        rx_params.tunerParams.bwType = sdrplay_api_Bw_MHzT.BW_1_536  # 1.536 MHz bandwidth
         rx_params.tunerParams.ifType = sdrplay_api_If_kHzT.IF_Zero  # Zero-IF like C example
         rx_params.tunerParams.loMode = sdrplay_api_LoModeT.Auto
 
