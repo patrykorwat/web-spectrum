@@ -26,18 +26,20 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RECORDINGS_DIR = os.path.join(SCRIPT_DIR, "recordings")
 
 # Recording configuration
+# NOTE: GPS L1 C/A signals use 15.345 MHz bandwidth (±7.67 MHz from 1575.42 MHz)
+# SDRplay hardware max bandwidth is 8 MHz - this captures the main lobe + some sidelobes
 RECORDING_CONFIG = {
-    'frequency': 1575420000,  # Hz (GPS L1)
+    'frequency': 1575420000,  # Hz (GPS L1 center: 1575.42 MHz)
     'frequency_mhz': 1575.42,  # MHz
-    'sample_rate': 2048000,  # Hz
-    'sample_rate_msps': 2.048,  # MSPS
+    'sample_rate': 10000000,  # Hz - 10 MSPS (max stable rate for SDRplay)
+    'sample_rate_msps': 10.0,  # MSPS
     'gain_reduction': 30,  # dB - CRITICAL: Lower gain prevents thermal shutdown!
     'actual_gain': 29,  # dB (59 - gain_reduction) - Tested: 5 min recording stable
-    'bandwidth_mhz': 2.0,  # MHz
+    'bandwidth_mhz': 8.0,  # MHz - Maximum SDRplay bandwidth (captures ~52% of GPS signal)
     'format': 'Complex64 (IQ)',
     'duration_default': 300,  # seconds (5 minutes)
-    'file_size_per_min_mb': 980,  # MB per minute
-    'expected_size_5min_gb': 4.9,  # GB for 5 minutes
+    'file_size_per_min_mb': 4800,  # MB per minute (10 MSPS * 60s * 8 bytes)
+    'expected_size_5min_gb': 24.0,  # GB for 5 minutes (WARNING: Very large files!)
     'tuner': 2,  # RSPduo tuner: 1 (Tuner A) or 2 (Tuner B) - SET THIS TO YOUR ANTENNA PORT!
     'bias_tee': 'ENABLED'  # Bias-T for active antenna power
 }
@@ -385,13 +387,14 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
                     # Fallback to hardcoded config if template doesn't exist
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] Template not found, using default config")
                     config_content = f"""; GNSS-SDR Configuration (Auto-generated)
+; 10 MSPS sample rate for full 8 MHz bandwidth
 [GNSS-SDR]
-GNSS-SDR.internal_fs_sps=2048000
+GNSS-SDR.internal_fs_sps=10000000
 
 SignalSource.implementation=File_Signal_Source
 SignalSource.filename={filepath}
 SignalSource.item_type=gr_complex
-SignalSource.sampling_frequency=2048000
+SignalSource.sampling_frequency=10000000
 SignalSource.freq=1575420000
 SignalSource.samples=0
 SignalSource.repeat=false
@@ -520,8 +523,9 @@ PVT.monitor_udp_port=1234
                                                 'timestamp': datetime.now().isoformat()
                                             }
                                             await ws.send(json_lib.dumps(log_msg))
-                                        except:
-                                            pass  # WebSocket disconnected
+                                        except Exception as ws_error:
+                                            print(f"[{datetime.now().strftime('%H:%M:%S')}] WebSocket send error at receiver time {line.strip()}: {ws_error}")
+                                            ws = None  # Mark as disconnected to prevent further errors
 
                             finally:
                                 if log_file:
@@ -557,17 +561,27 @@ PVT.monitor_udp_port=1234
                         if os.path.exists(spectrum_script):
                             print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting spectrum analysis...")
 
-                            # Analyze first 10 seconds for quick results
+                            # Analyze first 1 second for quick results (10 MSPS = 10M samples = large data!)
+                            # 3 seconds was too much memory (4+ GB) and took too long
                             spectrum_output = filepath.replace('.dat', '_spectrum_analysis.json')
                             spectrum_plot = filepath.replace('.dat', '_spectrum.png')
 
-                            subprocess.run([
+                            result = subprocess.run([
                                 'python3', spectrum_script,
                                 filepath,
-                                '--duration', '10',
+                                '--duration', '1',
                                 '--output', spectrum_output,
                                 '--plot', spectrum_plot
-                            ], capture_output=True, text=True, timeout=60)
+                            ], capture_output=True, text=True, timeout=180)  # 3 min timeout
+
+                            # Log any errors
+                            if result.returncode != 0:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] Spectrum analysis failed:")
+                                print(f"  stdout: {result.stdout}")
+                                print(f"  stderr: {result.stderr}")
+                            elif result.stderr:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] Spectrum analysis warnings:")
+                                print(f"  {result.stderr}")
 
                             print(f"[{datetime.now().strftime('%H:%M:%S')}] Spectrum analysis complete: {spectrum_output}")
                     except Exception as e:
@@ -587,7 +601,8 @@ PVT.monitor_udp_port=1234
                         f"{output_basename}.kml",
                         f"{output_basename}.gpx",
                         f"{output_basename}_spectrum_analysis.json",
-                        f"{output_basename}_spectrum.png"
+                        f"{output_basename}_spectrum.png",
+                        f"{output_basename}_spectrum_narrowband.png"
                     ]
                 }).encode())
 

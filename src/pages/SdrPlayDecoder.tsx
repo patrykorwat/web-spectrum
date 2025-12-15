@@ -329,15 +329,17 @@ function SdrPlayDecoder() {
             setIsProcessing(true); // Ensure processing flag is set
 
             // Check for spectrum analysis results (generated after ~10-15 seconds)
-            if (duration > 10 && recordingFile) {
+            if (duration > 10 && recordingFile && !spectrumAnalysis) {
               const spectrumJsonUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum_analysis.json')}`;
               fetch(spectrumJsonUrl)
                 .then(res => res.ok ? res.json() : null)
                 .then(data => {
-                  if (data && !spectrumAnalysis) {
-                    console.log('Spectrum analysis loaded:', data);
+                  if (data) {
+                    console.log('Spectrum analysis loaded during processing:', data);
                     setSpectrumAnalysis(data);
-                    setSpectrumImageUrl(`http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}`);
+                    const imageUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}`;
+                    setSpectrumImageUrl(imageUrl);
+                    console.log('Spectrum image URL set:', imageUrl);
                   }
                 })
                 .catch(() => {});  // Silently fail if not ready yet
@@ -347,6 +349,34 @@ function SdrPlayDecoder() {
             clearInterval(pollInterval);
             setIsProcessing(false);
             setProgressPhase('');
+
+            // Check for spectrum analysis results after processing completes
+            // Spectrum runs in background thread, so retry a few times with delay
+            if (recordingFile && !spectrumAnalysis) {
+              const checkSpectrum = (retries = 0) => {
+                const spectrumJsonUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum_analysis.json')}`;
+                fetch(spectrumJsonUrl)
+                  .then(res => res.ok ? res.json() : null)
+                  .then(data => {
+                    if (data) {
+                      console.log('Spectrum analysis loaded after completion:', data);
+                      setSpectrumAnalysis(data);
+                      const imageUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}`;
+                      setSpectrumImageUrl(imageUrl);
+                      console.log('Spectrum image URL set:', imageUrl);
+                    } else if (retries < 10) {
+                      // Retry after 2 seconds, up to 10 times (20 seconds total)
+                      setTimeout(() => checkSpectrum(retries + 1), 2000);
+                    }
+                  })
+                  .catch(() => {
+                    if (retries < 10) {
+                      setTimeout(() => checkSpectrum(retries + 1), 2000);
+                    }
+                  });
+              };
+              checkSpectrum(0);
+            }
 
             // Check if there was an error
             if (status.processing.error) {
@@ -448,9 +478,11 @@ return (
                   // Check if this is a GNSS log message
                   if (msg.msg && typeof msg.msg === 'object' && msg.msg.type === 'gnss_log') {
                     // GNSS log message from GNSS-SDR processing
+                    // Strip ANSI color codes from message
+                    const cleanMessage = msg.msg.message.replace(/\x1b\[[0-9;]*m/g, '');
                     const logMsg = {
-                      decoded: msg.msg.message,
-                      time: new Date(msg.msg.timestamp),
+                      decoded: cleanMessage,
+                      time: msg.msg.timestamp ? new Date(msg.msg.timestamp) : new Date(),
                       msg: msg.msg
                     };
                     setDecodedItems(prevDecodedItems => {
@@ -1024,11 +1056,11 @@ return (
             {spectrumImageUrl && (
               <Box sx={{ marginTop: '15px' }}>
                 <Typography variant="caption" sx={{ display: 'block', marginBottom: '10px', color: 'text.secondary' }}>
-                  Spectrogram (Time-Frequency Analysis)
+                  GPS L1 Main Lobe Spectrum (±1.023 MHz) - Multi-core Optimized
                 </Typography>
                 <img
                   src={spectrumImageUrl}
-                  alt="Spectrum Analysis"
+                  alt="GPS L1 Main Lobe Spectrum Analysis"
                   style={{ width: '100%', maxWidth: '900px', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '4px' }}
                   onError={(e) => {
                     console.log('Spectrum image failed to load');
@@ -1037,6 +1069,7 @@ return (
                 />
               </Box>
             )}
+
           </Box>
         )}
 
@@ -1349,9 +1382,12 @@ return (
       slotProps={{ legend: { hidden: true } }}
       series={[{ data: powerLevels, label: 'dB',  showMark: false, color: '#cc0052' }]}
       xAxis={[{ data: xPoints}]}
-    /> : null} 
-    <TableContainer component={Paper}>
-    <Table size="small" aria-label="simple table">
+    /> : null}
+    <Typography variant="caption" sx={{ display: 'block', marginTop: '10px', marginBottom: '5px', color: 'text.secondary' }}>
+      Showing all {decodedItems.length} log entries
+    </Typography>
+    <TableContainer component={Paper} sx={{ maxHeight: 600, overflow: 'auto' }}>
+    <Table size="small" aria-label="simple table" stickyHeader>
       <TableHead>
         <TableRow>
           <TableCell width='60%'>Decoded</TableCell>
@@ -1360,7 +1396,7 @@ return (
         </TableRow>
       </TableHead>
       <TableBody>
-      {decodedItems.slice(0, 50).map((row, index) => (
+      {decodedItems.map((row, index) => (
           <TableRow
             key={index}
             sx={{ '&:last-child td, &:last-child th': { border: 0 } }}

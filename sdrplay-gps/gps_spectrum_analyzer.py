@@ -44,10 +44,10 @@ except ImportError:
 class GPSSpectrumAnalyzer:
     """Analyzes GPS IQ samples for jamming signatures"""
 
-    def __init__(self, sample_rate=2048000):
+    def __init__(self, sample_rate=10000000):  # Default to 10 MSPS for full spectrum
         self.sample_rate = sample_rate
         self.center_freq = 1575.42e6  # GPS L1
-        self.gps_bandwidth = 2.046e6  # GPS C/A code bandwidth
+        self.gps_bandwidth = 15.345e6  # GPS L1 C/A full bandwidth (±7.67 MHz from center)
 
     def load_samples(self, filename, max_samples=None, skip_seconds=0.3):
         """Load complex64 IQ samples from file"""
@@ -79,8 +79,15 @@ class GPSSpectrumAnalyzer:
 
         return samples
 
-    def compute_spectrogram(self, samples, nperseg=2048, noverlap=None):
-        """Compute spectrogram for time-frequency analysis"""
+    def compute_spectrogram(self, samples, nperseg=2048, noverlap=None, n_jobs=-1):
+        """Compute spectrogram for time-frequency analysis with multi-core support
+
+        Args:
+            samples: IQ samples
+            nperseg: FFT size
+            noverlap: Overlap samples
+            n_jobs: Number of parallel jobs (-1 = all cores, 1 = sequential)
+        """
         if noverlap is None:
             noverlap = nperseg // 2
 
@@ -88,7 +95,25 @@ class GPSSpectrumAnalyzer:
         print(f"  FFT size: {nperseg}")
         print(f"  Overlap: {noverlap}")
 
+        # Enable numpy multithreading for FFT operations
+        import os
+        if n_jobs == -1:
+            n_cores = os.cpu_count() or 1
+        else:
+            n_cores = max(1, n_jobs)
+
+        # Set environment variables for numpy/scipy BLAS threading
+        os.environ['OMP_NUM_THREADS'] = str(n_cores)
+        os.environ['OPENBLAS_NUM_THREADS'] = str(n_cores)
+        os.environ['MKL_NUM_THREADS'] = str(n_cores)
+        os.environ['NUMEXPR_NUM_THREADS'] = str(n_cores)
+
+        print(f"  Using {n_cores} CPU cores for parallel processing")
+
         if SCIPY_AVAILABLE:
+            import time
+            start_time = time.time()
+
             f, t, Sxx = signal.spectrogram(
                 samples,
                 fs=self.sample_rate,
@@ -97,6 +122,10 @@ class GPSSpectrumAnalyzer:
                 window='boxcar',  # Rectangular window for best narrow-line resolution
                 return_onesided=False
             )
+
+            elapsed = time.time() - start_time
+            print(f"  Spectrogram computed in {elapsed:.1f} seconds")
+
             # Shift to center DC
             f = fftshift(f)
             Sxx = fftshift(Sxx, axes=0)
@@ -484,7 +513,7 @@ Detection capabilities:
     parser.add_argument('-d', '--duration', type=float, help='Analyze first N seconds')
     parser.add_argument('-p', '--plot', type=str, help='Save spectrum plot to file')
     parser.add_argument('-o', '--output', type=str, help='JSON report output path')
-    parser.add_argument('--sample-rate', type=float, default=2.048e6, help='Sample rate (default: 2.048 MSPS)')
+    parser.add_argument('--sample-rate', type=float, default=10e6, help='Sample rate (default: 10 MSPS for 8 MHz bandwidth recordings)')
 
     args = parser.parse_args()
 
@@ -520,12 +549,15 @@ Detection capabilities:
 
     samples = analyzer.load_samples(input_file, max_samples)
 
-    # Compute spectrogram optimized for narrowband high-resolution view
-    # nperseg=16384 gives ~125 Hz bins (2.048 MHz / 16384) - good frequency resolution
-    # noverlap=14336 (87.5% overlap) gives smooth time resolution with faster processing
-    # Hop size = 2048 samples = 1ms time steps - balanced quality and speed
-    # Optimized for 3-minute rendering time
-    f, t, Sxx_db = analyzer.compute_spectrogram(samples, nperseg=16384, noverlap=14336)
+    # Compute spectrogram optimized for 10 MSPS data with multi-core processing
+    # nperseg=8192 gives ~1.22 kHz bins (10 MHz / 8192) - good frequency resolution
+    # noverlap=6144 (75% overlap) gives smooth time resolution with faster processing
+    # Hop size = 2048 samples = 0.2ms time steps - fast processing, good quality
+    # Multi-core FFT processing enabled (uses all CPU cores)
+    print(f"\n{'='*70}")
+    print(f"STARTING PARALLEL SPECTROGRAM COMPUTATION")
+    print(f"{'='*70}")
+    f, t, Sxx_db = analyzer.compute_spectrogram(samples, nperseg=8192, noverlap=6144, n_jobs=-1)
 
     # Run all detections
     results = {}
@@ -554,16 +586,24 @@ Detection capabilities:
     else:
         print(f"\n✓ No jamming detected (clean signal)")
 
-    # Generate plot if requested
+    # Generate plots if requested
     if args.plot and PLOTTING_AVAILABLE:
-        print(f"\nGenerating spectrum plot...")
-        plot_spectrum(f, t, Sxx_db, results, args.plot, analyzer.sample_rate)
-        print(f"✓ Plot saved: {args.plot}")
+        try:
+            print(f"\nGenerating GPS main lobe spectrum plot (skip full spectrum for speed)...")
 
-        # Also generate narrowband zoom plot (center +200 kHz ±100 kHz = 200 kHz total, 5 seconds)
-        narrowband_plot = args.plot.replace('.png', '_narrowband.png')
-        plot_narrowband_zoom(f, t, Sxx_db, narrowband_plot, zoom_bw=200e3, time_duration=5.0, freq_offset=200e3)
-        print(f"✓ Narrowband zoom plot saved: {narrowband_plot}")
+            # Generate ONLY main lobe zoom plot using existing spectrogram
+            # Show GPS L1 C/A main lobe: ±1.023 MHz (2.046 MHz total bandwidth)
+            # This includes: spectrogram + average spectrum + average power vs time (3-panel view)
+
+            # Generate main lobe plot: ±1.023 MHz centered at DC (no offset), 12 seconds max
+            plot_narrowband_zoom(f, t, Sxx_db, args.plot,
+                               zoom_bw=2.046e6, freq_offset=0, time_duration=12.0)
+            print(f"✓ GPS main lobe plot saved: {args.plot}")
+            print(f"  (Skipped full spectrum plot for faster processing)")
+        except Exception as e:
+            print(f"✗ ERROR generating plot: {e}")
+            import traceback
+            traceback.print_exc()
 
     print("\n" + "=" * 70)
 
@@ -608,45 +648,87 @@ def plot_narrowband_zoom(f, t, Sxx_db, output_path, zoom_bw=200e3, time_duration
     print(f"  Dynamic range: {vmin:.1f} to {vmax:.1f} dB")
     print(f"  Frequency resolution: {f[1]-f[0]:.1f} Hz/bin")
 
-    # Create high-quality plot optimized for fast rendering
-    fig, ax = plt.subplots(figsize=(20, 12), dpi=150)
+    # Create multi-panel plot like comprehensive view
+    fig = plt.figure(figsize=(20, 14), dpi=150)
+    from matplotlib.gridspec import GridSpec
+    gs = GridSpec(3, 1, figure=fig, hspace=0.3, height_ratios=[6, 1, 1])
 
     # Dark background for better contrast with colorful spectrum
     fig.patch.set_facecolor('#0a0a0a')
-    ax.set_facecolor('#1a1a1a')
+
+    # Main spectrogram panel
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.set_facecolor('#1a1a1a')
 
     # Use 'gouraud' shading for smooth, anti-aliased appearance (no pixelation)
     # This interpolates between data points for a continuous look
     # Use 'viridis' colormap - gentle, perceptually uniform, great for subtle features
     # Dark blue background shows noise floor, bright yellow highlights lines
-    im = ax.pcolormesh(t_zoom, f_zoom / 1e3, Sxx_zoom, shading='gouraud',
+    im = ax1.pcolormesh(t_zoom, f_zoom / 1e3, Sxx_zoom, shading='gouraud',
                        cmap='viridis', vmin=vmin, vmax=vmax, rasterized=False)
 
-    ax.set_ylabel('Frequency offset (kHz)', fontsize=14, fontweight='bold', color='white')
-    ax.set_xlabel('Time (s)', fontsize=14, fontweight='bold', color='white')
+    ax1.set_ylabel('Frequency offset (kHz)', fontsize=14, fontweight='bold', color='white')
+    ax1.set_xlabel('Time (s)', fontsize=14, fontweight='bold', color='white')
     time_duration_str = f"{t_zoom[-1]:.1f}s" if len(t_zoom) > 0 else "N/A"
     offset_str = f"+{freq_offset/1e3:.0f} kHz " if freq_offset != 0 else ""
-    ax.set_title(f'Narrowband Zoom: {offset_str}±{zoom_bw/2e3:.0f} kHz | {time_duration_str} | Resolution: {f[1]-f[0]:.1f} Hz/bin | {len(t_zoom)} time bins',
+    ax1.set_title(f'Narrowband Zoom: {offset_str}±{zoom_bw/2e3:.0f} kHz | {time_duration_str} | Resolution: {f[1]-f[0]:.1f} Hz/bin | {len(t_zoom)} time bins',
                  fontsize=16, fontweight='bold', color='white')
 
     # Style axes for dark theme
-    ax.tick_params(colors='white', which='both')
-    ax.spines['bottom'].set_color('white')
-    ax.spines['top'].set_color('white')
-    ax.spines['left'].set_color('white')
-    ax.spines['right'].set_color('white')
+    ax1.tick_params(colors='white', which='both')
+    ax1.spines['bottom'].set_color('white')
+    ax1.spines['top'].set_color('white')
+    ax1.spines['left'].set_color('white')
+    ax1.spines['right'].set_color('white')
 
     # Add grid for easier line tracking
-    ax.grid(True, alpha=0.3, color='white', linestyle='--', linewidth=0.5)
+    ax1.grid(True, alpha=0.3, color='white', linestyle='--', linewidth=0.5)
 
-    cbar = plt.colorbar(im, ax=ax, label='Power (dB)')
+    cbar = plt.colorbar(im, ax=ax1, label='Power (dB)')
     cbar.set_label('Power (dB)', fontsize=12, fontweight='bold', color='white')
     cbar.ax.tick_params(colors='white')
     cbar.outline.set_edgecolor('white')
 
+    # Average spectrum panel
+    ax2 = fig.add_subplot(gs[1, 0])
+    ax2.set_facecolor('#1a1a1a')
+    avg_spectrum = np.mean(Sxx_zoom, axis=1)
+    ax2.plot(f_zoom / 1e3, avg_spectrum, 'cyan', linewidth=1.0, label='Average spectrum')
+    ax2.set_ylabel('Power (dB)', fontsize=10, color='white')
+    ax2.set_xlabel('Frequency offset (kHz)', fontsize=10, color='white')
+    ax2.set_title('Average Spectrum (time-averaged)', fontsize=11, color='white')
+    ax2.grid(True, alpha=0.3, color='white')
+    ax2.set_xlim(f_zoom[0] / 1e3, f_zoom[-1] / 1e3)
+    ax2.tick_params(colors='white', which='both')
+    ax2.spines['bottom'].set_color('white')
+    ax2.spines['top'].set_color('white')
+    ax2.spines['left'].set_color('white')
+    ax2.spines['right'].set_color('white')
+    legend = ax2.legend(fontsize=8, loc='upper right')
+    legend.get_frame().set_facecolor('#1a1a1a')
+    legend.get_frame().set_edgecolor('white')
+    for text in legend.get_texts():
+        text.set_color('white')
+
+    # Time-domain power panel
+    ax3 = fig.add_subplot(gs[2, 0])
+    ax3.set_facecolor('#1a1a1a')
+    time_power = np.mean(Sxx_zoom, axis=0)
+    ax3.plot(t_zoom, time_power, 'yellow', linewidth=1.0)
+    ax3.set_ylabel('Power (dB)', fontsize=10, color='white')
+    ax3.set_xlabel('Time (s)', fontsize=10, color='white')
+    ax3.set_title('Average Power vs Time (frequency-averaged)', fontsize=11, color='white')
+    ax3.grid(True, alpha=0.3, color='white')
+    ax3.set_xlim(t_zoom[0], t_zoom[-1])
+    ax3.tick_params(colors='white', which='both')
+    ax3.spines['bottom'].set_color('white')
+    ax3.spines['top'].set_color('white')
+    ax3.spines['left'].set_color('white')
+    ax3.spines['right'].set_color('white')
+
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"  Saved smooth narrowband plot with {len(f_zoom)} freq bins × {len(t_zoom)} time bins")
+    print(f"  Saved narrowband plot with {len(f_zoom)} freq bins × {len(t_zoom)} time bins (3-panel view)")
 
 
 def plot_spectrum(f, t, Sxx_db, results, output_path, sample_rate=2048000):
@@ -655,16 +737,14 @@ def plot_spectrum(f, t, Sxx_db, results, output_path, sample_rate=2048000):
     # High resolution is crucial for seeing ~300 Hz wide spectral lines
     print(f"\nGenerating plot with FULL resolution: {len(t)} time bins × {len(f)} frequency bins...")
 
-    # IMPROVED dynamic range for narrow-band signal visibility
-    # Use percentile-based scaling to suppress noise and highlight lines
+    # Use same gentle dynamic range as narrowband for consistency
+    # Narrow 8 dB range to emphasize subtle spectral lines
     noise_floor = np.percentile(Sxx_db, 25)  # 25th percentile = noise floor
     signal_peak = np.percentile(Sxx_db, 99.9)  # 99.9th percentile = peak signals
 
-    # Balanced dynamic range to show both strong and weak lines
-    # Start from 40th percentile to suppress some noise but keep weak signals
-    # This reveals more narrow lines while maintaining good contrast
-    vmin = np.percentile(Sxx_db, 40)  # Moderate noise suppression
-    vmax = vmin + 25  # 25 dB range for balanced visibility
+    # Gentle dynamic range matching narrowband view
+    vmin = np.percentile(Sxx_db, 60)  # Higher floor to suppress noise
+    vmax = vmin + 8  # Very narrow 8 dB range to highlight subtle features
 
     print(f"  Dynamic range: {vmin:.1f} to {vmax:.1f} dB ({vmax-vmin:.1f} dB span)")
     print(f"  Noise floor (25th percentile): {noise_floor:.1f} dB")
@@ -675,19 +755,33 @@ def plot_spectrum(f, t, Sxx_db, results, output_path, sample_rate=2048000):
     fig = plt.figure(figsize=(24, 16), dpi=300)
     gs = GridSpec(4, 1, figure=fig, hspace=0.25, height_ratios=[6, 1, 1, 0.5])
 
+    # Dark theme background matching narrowband
+    fig.patch.set_facecolor('#0a0a0a')
+
     # Main spectrogram - FULL WIDTH with time horizontal
     ax1 = fig.add_subplot(gs[0, 0])
-    # Use 'hot' colormap - high contrast for narrow-band line visibility
-    # Dark background with bright lines (like SDRconnect/GQRX)
-    # Use 'auto' shading for best rendering (interpolates if data is dense enough)
+    ax1.set_facecolor('#1a1a1a')
+
+    # Use 'viridis' colormap - same gentle colors as narrowband
+    # Auto shading for speed (rasterized for large datasets)
     im = ax1.pcolormesh(t, f / 1e6, Sxx_db, shading='auto',
-                        cmap='hot', vmin=vmin, vmax=vmax, rasterized=True)
-    ax1.set_ylabel('Frequency offset (MHz)', fontsize=11)
-    ax1.set_xlabel('Time (s)', fontsize=11)
+                        cmap='viridis', vmin=vmin, vmax=vmax, rasterized=True)
+    ax1.set_ylabel('Frequency offset (MHz)', fontsize=11, color='white')
+    ax1.set_xlabel('Time (s)', fontsize=11, color='white')
     ax1.set_title(f'GPS L1 Spectrogram - Jamming Detection (Resolution: {f[1]-f[0]:.1f} Hz/bin)',
-                  fontsize=13, fontweight='bold')
+                  fontsize=13, fontweight='bold', color='white')
+
+    # Style axes for dark theme
+    ax1.tick_params(colors='white', which='both')
+    ax1.spines['bottom'].set_color('white')
+    ax1.spines['top'].set_color('white')
+    ax1.spines['left'].set_color('white')
+    ax1.spines['right'].set_color('white')
+
     cbar = plt.colorbar(im, ax=ax1, label='Power (dB)')
-    cbar.set_label('Power (dB)', fontsize=10)
+    cbar.set_label('Power (dB)', fontsize=10, color='white')
+    cbar.ax.tick_params(colors='white')
+    cbar.outline.set_edgecolor('white')
 
     # Detection indicators - top left corner
     detections_text = []
@@ -704,8 +798,9 @@ def plot_spectrum(f, t, Sxx_db, results, output_path, sample_rate=2048000):
 
     # Average spectrum - FULL WIDTH below spectrogram
     ax2 = fig.add_subplot(gs[1, 0])
+    ax2.set_facecolor('#1a1a1a')
     avg_spectrum = np.mean(Sxx_db, axis=1)
-    ax2.plot(f / 1e6, avg_spectrum, 'b-', linewidth=0.8, label='Average spectrum')
+    ax2.plot(f / 1e6, avg_spectrum, 'cyan', linewidth=0.8, label='Average spectrum')
 
     # Highlight narrow-band signals if detected
     if 'narrowband' in results and results['narrowband']['detected']:
@@ -713,28 +808,43 @@ def plot_spectrum(f, t, Sxx_db, results, output_path, sample_rate=2048000):
         for peak in peaks[:10]:  # Show top 10 on plot
             freq_mhz = peak['freq_mhz']
             # Draw vertical line at peak frequency
-            ax2.axvline(freq_mhz, color='red', linestyle='--', linewidth=1, alpha=0.6)
+            ax2.axvline(freq_mhz, color='yellow', linestyle='--', linewidth=1, alpha=0.6)
             # Annotate with bandwidth
             ax2.text(freq_mhz, ax2.get_ylim()[1], f"{peak['bandwidth_hz']:.0f}Hz",
-                    rotation=90, fontsize=7, color='red', alpha=0.8,
+                    rotation=90, fontsize=7, color='yellow', alpha=0.8,
                     verticalalignment='top', horizontalalignment='right')
 
-    ax2.set_ylabel('Power (dB)', fontsize=10)
-    ax2.set_xlabel('Frequency offset (MHz)', fontsize=10)
-    ax2.set_title('Average Spectrum (time-averaged) - Red lines: narrow-band signals', fontsize=11)
-    ax2.grid(True, alpha=0.3)
+    ax2.set_ylabel('Power (dB)', fontsize=10, color='white')
+    ax2.set_xlabel('Frequency offset (MHz)', fontsize=10, color='white')
+    ax2.set_title('Average Spectrum (time-averaged) - Yellow lines: narrow-band signals', fontsize=11, color='white')
+    ax2.grid(True, alpha=0.3, color='white')
     ax2.set_xlim(f[0] / 1e6, f[-1] / 1e6)
-    ax2.legend(fontsize=8, loc='upper right')
+    ax2.tick_params(colors='white', which='both')
+    ax2.spines['bottom'].set_color('white')
+    ax2.spines['top'].set_color('white')
+    ax2.spines['left'].set_color('white')
+    ax2.spines['right'].set_color('white')
+    legend = ax2.legend(fontsize=8, loc='upper right')
+    legend.get_frame().set_facecolor('#1a1a1a')
+    legend.get_frame().set_edgecolor('white')
+    for text in legend.get_texts():
+        text.set_color('white')
 
     # Time-domain power - FULL WIDTH
     ax3 = fig.add_subplot(gs[2, 0])
+    ax3.set_facecolor('#1a1a1a')
     time_power = np.mean(Sxx_db, axis=0)
-    ax3.plot(t, time_power, 'r-', linewidth=0.8)
-    ax3.set_ylabel('Power (dB)', fontsize=10)
-    ax3.set_xlabel('Time (s)', fontsize=10)
-    ax3.set_title('Average Power vs Time (frequency-averaged)', fontsize=11)
-    ax3.grid(True, alpha=0.3)
+    ax3.plot(t, time_power, 'yellow', linewidth=0.8)
+    ax3.set_ylabel('Power (dB)', fontsize=10, color='white')
+    ax3.set_xlabel('Time (s)', fontsize=10, color='white')
+    ax3.set_title('Average Power vs Time (frequency-averaged)', fontsize=11, color='white')
+    ax3.grid(True, alpha=0.3, color='white')
     ax3.set_xlim(t[0], t[-1])
+    ax3.tick_params(colors='white', which='both')
+    ax3.spines['bottom'].set_color('white')
+    ax3.spines['top'].set_color('white')
+    ax3.spines['left'].set_color('white')
+    ax3.spines['right'].set_color('white')
 
     # Detection metrics - compact summary
     ax4 = fig.add_subplot(gs[3, 0])
@@ -773,4 +883,14 @@ def plot_spectrum(f, t, Sxx_db, results, output_path, sample_rate=2048000):
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n{'='*70}")
+        print(f"FATAL ERROR")
+        print(f"{'='*70}")
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        import sys
+        sys.exit(1)

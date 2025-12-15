@@ -1070,8 +1070,16 @@ class GNSSSDRBridge:
         print("🚀 Starting bridge services...")
         print("")
 
-        # Start WebSocket server
-        async with websockets.serve(self.handle_client, "0.0.0.0", self.websocket_port):
+        # Start WebSocket server with keepalive to prevent timeout
+        # ping_interval=None disables automatic ping (prevents 40s disconnect)
+        # ping_timeout=None disables pong timeout
+        async with websockets.serve(
+            self.handle_client,
+            "0.0.0.0",
+            self.websocket_port,
+            ping_interval=None,  # Disable automatic ping
+            ping_timeout=None    # Disable pong timeout
+        ):
             print(f"✓ WebSocket server listening on ws://localhost:{self.websocket_port}")
             print("")
 
