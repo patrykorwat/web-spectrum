@@ -25,6 +25,7 @@ import ButtonGroup from '@mui/material/ButtonGroup';
 import { FormControl } from '@mui/base/FormControl';
 import MuiFormControl from '@mui/material/FormControl';
 import LinearProgress from '@mui/material/LinearProgress';
+import CircularProgress from '@mui/material/CircularProgress';
 
 import { LineChart } from '@mui/x-charts/LineChart';
 
@@ -122,6 +123,8 @@ function SdrPlayDecoder() {
   // Spectrum analysis results
   const [spectrumAnalysis, setSpectrumAnalysis] = useState<any>(null);
   const [spectrumImageUrl, setSpectrumImageUrl] = useState<string | null>(null);
+  const [spectrumImageLoading, setSpectrumImageLoading] = useState<boolean>(false);
+  const [waitingForSpectrum, setWaitingForSpectrum] = useState<boolean>(false);
 
   const pointsBatch = 10000;
 
@@ -209,6 +212,8 @@ function SdrPlayDecoder() {
       // Reset spectrum analysis state for new recording
       setSpectrumAnalysis(null);
       setSpectrumImageUrl(null);
+      setSpectrumImageLoading(false);
+      setWaitingForSpectrum(false);
 
       const response = await fetch('http://localhost:3001/gnss/start-recording', {
         method: 'POST',
@@ -341,10 +346,24 @@ function SdrPlayDecoder() {
                   if (data) {
                     console.log('Spectrum analysis loaded during processing:', data);
                     setSpectrumAnalysis(data);
-                    // Add timestamp to prevent browser caching
-                    const imageUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}?t=${Date.now()}`;
-                    setSpectrumImageUrl(imageUrl);
-                    console.log('Spectrum image URL set:', imageUrl);
+
+                    // Check if PNG file exists before setting URL
+                    const imageUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}`;
+                    fetch(imageUrl, { method: 'GET' })
+                      .then(res => {
+                        if (res.ok) {
+                          // PNG exists, load it with cache-busting timestamp
+                          const timestampedUrl = `${imageUrl}?t=${Date.now()}`;
+                          setSpectrumImageUrl(timestampedUrl);
+                          setSpectrumImageLoading(true);
+                          console.log('Spectrum image URL set during processing:', timestampedUrl);
+                        } else {
+                          console.log('PNG not ready yet during processing, will check after completion');
+                        }
+                      })
+                      .catch(() => {
+                        console.log('PNG check failed during processing');
+                      });
                   }
                 })
                 .catch(() => {});  // Silently fail if not ready yet
@@ -356,28 +375,70 @@ function SdrPlayDecoder() {
             setProgressPhase('');
 
             // Check for spectrum analysis results after processing completes
-            // Spectrum runs in background thread, so retry a few times with delay
-            if (recordingFile && !spectrumAnalysis) {
+            // Spectrum runs in background thread and can take up to 10 minutes
+            // Retry for up to 10 minutes (300 retries × 2 seconds = 10 minutes)
+            if (recordingFile) {
+              console.log(`Starting spectrum image polling (up to 10 minutes)... Current URL: ${spectrumImageUrl || 'null'}`);
+
+              // Always try to load spectrum, even if URL was set (might have failed)
+              if (!spectrumImageUrl) {
+                setWaitingForSpectrum(true); // Show waiting message
+              }
+
               const checkSpectrum = (retries = 0) => {
+                // Skip if already loaded successfully
+                if (spectrumImageUrl && document.querySelector(`img[src*="${recordingFile.replace('.dat', '_spectrum.png')}"]`)) {
+                  console.log('Spectrum already loaded, skipping poll');
+                  setWaitingForSpectrum(false);
+                  return;
+                }
+
                 const spectrumJsonUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum_analysis.json')}`;
-                fetch(spectrumJsonUrl)
-                  .then(res => res.ok ? res.json() : null)
-                  .then(data => {
-                    if (data) {
-                      console.log('Spectrum analysis loaded after completion:', data);
-                      setSpectrumAnalysis(data);
-                      // Add timestamp to prevent browser caching
-                      const imageUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}?t=${Date.now()}`;
-                      setSpectrumImageUrl(imageUrl);
-                      console.log('Spectrum image URL set:', imageUrl);
-                    } else if (retries < 10) {
-                      // Retry after 2 seconds, up to 10 times (20 seconds total)
-                      setTimeout(() => checkSpectrum(retries + 1), 2000);
+                const imageUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}`;
+
+                console.log(`[Spectrum Poll ${retries}] Checking: ${imageUrl}`);
+
+                // Poll for PNG file directly (this is what we need to display!)
+                fetch(imageUrl, { method: 'HEAD' })  // Use HEAD to check existence without downloading
+                  .then(pngRes => {
+                    if (pngRes.ok) {
+                      // PNG exists! Now optionally load JSON for analysis data
+                      console.log('✅ Spectrum PNG found! Loading analysis data...');
+                      fetch(spectrumJsonUrl)
+                        .then(res => res.ok ? res.json() : null)
+                        .then(data => {
+                          if (data) {
+                            console.log('Spectrum analysis JSON loaded:', data);
+                            setSpectrumAnalysis(data);
+                          }
+                        })
+                        .catch(() => console.log('JSON not available yet, but PNG exists'));
+
+                      // Load the PNG with cache-busting timestamp
+                      const timestampedUrl = `${imageUrl}?t=${Date.now()}`;
+                      setSpectrumImageUrl(timestampedUrl);
+                      setSpectrumImageLoading(true);
+                      setWaitingForSpectrum(false);
+                      console.log('✅ Spectrum image URL set:', timestampedUrl);
+                    } else {
+                      // PNG doesn't exist yet, keep waiting and retry
+                      if (retries < 300) {
+                        if (retries % 15 === 0) {
+                          console.log(`Waiting for spectrum PNG... (${retries * 2}s elapsed)`);
+                        }
+                        setTimeout(() => checkSpectrum(retries + 1), 2000);
+                      } else {
+                        console.error('Spectrum image timed out after 10 minutes');
+                        setWaitingForSpectrum(false);
+                      }
                     }
                   })
                   .catch(() => {
-                    if (retries < 10) {
+                    // PNG check failed, retry
+                    if (retries < 300) {
                       setTimeout(() => checkSpectrum(retries + 1), 2000);
+                    } else {
+                      setWaitingForSpectrum(false);
                     }
                   });
               };
@@ -1058,22 +1119,55 @@ return (
               </Box>
             </Box>
 
+            {/* Waiting for Spectrum Generation */}
+            {waitingForSpectrum && !spectrumImageUrl && (
+              <Box sx={{ marginTop: '20px', padding: '20px', backgroundColor: 'rgba(255, 165, 0, 0.1)', borderRadius: '8px', border: '1px solid rgba(255, 165, 0, 0.3)' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <CircularProgress size={40} sx={{ color: 'orange' }} />
+                  <Box sx={{ marginLeft: '20px' }}>
+                    <Typography variant="body1" sx={{ fontWeight: 'bold', color: 'orange' }}>
+                      Generating Spectrum Analysis...
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: 'text.secondary', marginTop: '5px' }}>
+                      This may take up to 10 minutes. Please wait...
+                    </Typography>
+                  </Box>
+                </Box>
+              </Box>
+            )}
+
             {/* Spectrum Visualization */}
             {spectrumImageUrl && (
               <Box sx={{ marginTop: '15px' }}>
                 <Typography variant="caption" sx={{ display: 'block', marginBottom: '10px', color: 'text.secondary' }}>
                   GPS L1 Main Lobe Spectrum (±1.023 MHz) - Multi-core Optimized
                 </Typography>
+                {spectrumImageLoading && (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '40px' }}>
+                    <CircularProgress size={60} />
+                    <Typography variant="body2" sx={{ marginLeft: '20px', color: 'text.secondary' }}>
+                      Loading spectrum image...
+                    </Typography>
+                  </Box>
+                )}
                 <img
                   key={spectrumImageUrl}
                   src={spectrumImageUrl}
                   alt="GPS L1 Main Lobe Spectrum Analysis"
-                  style={{ width: '100%', maxWidth: '900px', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '4px' }}
+                  style={{
+                    width: '100%',
+                    maxWidth: '900px',
+                    border: '1px solid rgba(0,0,0,0.1)',
+                    borderRadius: '4px',
+                    display: spectrumImageLoading ? 'none' : 'block'
+                  }}
                   onLoad={() => {
                     console.log('Spectrum image loaded successfully:', spectrumImageUrl);
+                    setSpectrumImageLoading(false); // Hide spinner when loaded
                   }}
                   onError={(e) => {
                     console.error('Spectrum image failed to load:', spectrumImageUrl);
+                    setSpectrumImageLoading(false); // Hide spinner on error
                     e.currentTarget.style.display = 'none';
                   }}
                 />

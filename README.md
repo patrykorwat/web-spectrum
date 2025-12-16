@@ -1,148 +1,204 @@
 # web-spectrum
-Web app for spectrum analyzers.
+
+Web-based spectrum analyzer and GPS signal analysis platform.
 
 Visit [patrykorwat.github.io/web-spectrum](https://meshuga.github.io/web-spectrum/) to access the app.
 
-The application has two features:
-* Spectrum analyzer
-* Data decoding
+## Features
+* **Spectrum analyzer** - Real-time frequency analysis
+* **GPS signal recording & analysis** - Professional-grade GNSS processing
+* **Data decoding** - ADS-B, ISM, and multi-constellation GNSS
 
-Supported devices:
-* tinySA Ultra
-* RTL-SDR with RTL2832U (includes V4)
-* SDRPlay (tested with RSPduo) (via WebSocket-based bridge)
+## Supported Devices
+* **tinySA Ultra** - Spectrum analyzer
+* **RTL-SDR** (RTL2832U) - Including V4 dongles ($25-40)
+* **SDRPlay** (RSPduo, RSP1A, etc.) - Professional SDR receivers ($200-300)
 
-Supported environments:
+## Supported Browsers
 * Chrome
 * Edge
 * Opera
 
 See more: [caniuse.com/web-serial](https://caniuse.com/web-serial), [caniuse.com/webusb](https://caniuse.com/webusb)
 
-## Spectrum analyzer
-![spectrum ](spectrum.gif)
+## Installation
 
-Spectrum analyzer allows for showing available spectrum for requested frequencies.
+### Prerequisites
+```bash
+# Clone repository
+git clone https://github.com/meshuga/web-spectrum.git
+cd web-spectrum
 
-## Data decoding
-Data decode sets a trigger and upon detection of a signal, the device captures it for decoding purposes.
+# Install Node.js dependencies
+npm install
+```
+
+### GNSS-SDR Installation (Required for GPS Analysis)
+
+GNSS-SDR is required for professional GPS signal processing with both SDRPlay and RTL-SDR devices.
+
+**macOS Installation:**
+```bash
+cd gnss-sdr
+./install_gnss_sdr.sh
+```
+
+The installation script will:
+- Install Homebrew dependencies (Boost, GLOG, Armadillo, etc.)
+- Clone and build GNSS-SDR from source
+- Install to `/usr/local/bin/gnss-sdr`
+- Takes approximately 30-40 minutes
+
+**Verify Installation:**
+```bash
+gnss-sdr --version
+# Should output: gnss-sdr version 0.0.19
+```
+
+### SDRPlay API Installation
+
+**macOS:**
+```bash
+# Download from SDRplay website
+# https://www.sdrplay.com/downloads/
+# Install SDRplay API v3.15 or later
+
+# Verify installation
+ls /Library/SDRplayAPI/
+# Should show: 3.15.1 (or similar)
+```
+
+### Python Dependencies
+```bash
+# Install Python packages for SDRPlay recording
+pip3 install numpy websockets
+
+# Optional: For protobuf PVT message parsing
+pip3 install protobuf
+```
+
+## Quick Start
+
+### Start the Web Application
+```bash
+npm start
+# Opens browser at http://localhost:3005
+```
+
+### Start Backend Services
+
+**For SDRPlay GPS Recording:**
+```bash
+# Terminal 1: Start recording API server
+cd sdrplay-gps
+python3 recording_api_simple.py
+# Listens on http://localhost:3001
+
+# Terminal 2: Start GNSS-SDR bridge
+python3 gnss_sdr_bridge.py
+# Listens on ws://localhost:8766
+```
+
+**For RTL-SDR GPS Recording:**
+```bash
+# Terminal 1: Start recording API server
+cd rtl-sdr-gps
+python3 recording_api_simple.py
+# Listens on http://localhost:3001
+
+# Terminal 2: Start GNSS-SDR bridge
+python3 gnss_sdr_bridge.py
+# Listens on ws://localhost:8766
+```
+
+### Using the GPS Recording Feature
+
+1. **Open browser** at [http://localhost:3005](http://localhost:3005)
+2. **Navigate** to SDRPlay or RTL-SDR Decoder page
+3. **Select mode**: "Professional Mode (GNSS-SDR)"
+4. **Start recording**: Click "⏺ Start Recording (5 min)"
+5. **Wait for processing**: Spectrum analysis runs automatically
+6. **View results**:
+   - Spectrum waterfall showing GPS signals and jamming
+   - Position fix (latitude, longitude, altitude)
+   - Satellite tracking status
+
+## Device-Specific Features
 
 ### TinySA Ultra
 ![decode](decode.jpg)
 
-The current implementation is able to decode 1 message at a given time of size around 24 bits.
+**Spectrum Analyzer Mode:**
+- Real-time frequency sweep and display
+- Signal strength measurements
+- Waterfall display
+
+**Decode Mode:**
+- Trigger-based signal capture
+- Decodes messages up to ~24 bits
+- Supports various modulation schemes
 
 ### RTL-SDR
+
 ![decode1](rtl-sdr-ads-b.jpg)
 ![decode2](rtl-sdr-ism.png)
 
-**Two modes available:**
+**Browser Processing Mode:**
+Direct in-browser signal decoding:
+- **ADS-B** - Aircraft position tracking (1090 MHz)
+- **ISM GateTX** - 433/868 MHz protocols
+- **Basic GNSS** - GPS L1, Galileo E1, GLONASS L1OF, BeiDou B1I
 
-#### 1. Professional Mode (GNSS-SDR Backend) - **RECOMMENDED for GPS**
-Uses industry-standard GNSS-SDR software with RTL-SDR dongles:
-- ✅ Works with any RTL-SDR dongle (~$25-40)
-- ✅ Professional-grade GPS signal processing
-- ✅ Real satellite tracking with C/N0 measurements
-- ✅ Automatic WebSocket integration
-- ✅ **Single-command operation**
+**Professional Mode (GNSS-SDR):**
+- Record GPS signals to file (2.048 MSPS)
+- Process with GNSS-SDR for satellite tracking
+- Spectrum analysis with jamming detection
+- Position fix calculation
+- Works with any RTL-SDR dongle ($25-40)
 
-📚 **Documentation:** [RTL-SDR GNSS Setup](./gnss-sdr/README_RTLSDR.md)
+### SDRPlay (RSPduo, RSP1A, etc.)
 
-**Quick Start:**
-```bash
-# Install GNSS-SDR (one-time setup)
-cd gnss-sdr
-./install_gnss_sdr.sh
+![sdrplay-gnss-sdr](sdrplay-gnss-sdr.png)
 
-# Start GNSS-SDR with RTL-SDR
-./start_gnss_rtlsdr.sh
+**Professional GPS Recording & Analysis:**
 
-# Browser:
-# 1. Open http://localhost:3005
-# 2. Go to SDRPlay Decoder page
-# 3. Click "Listen & Decode"
-# 4. See satellites in decode table!
-```
+SDRPlay devices work with GNSS-SDR for professional-grade GPS signal analysis:
 
-#### 2. Browser Processing Mode
-Direct browser-based signal processing for ADS-B and ISM protocols:
-* ADS-B (aircraft tracking)
-* ISM GateTX
-* Basic GNSS (GPS L1, Galileo E1, GLONASS L1OF, BeiDou B1I)
+**Features:**
+- ✅ **5-minute GPS recordings** at 2.048 MSPS (4.9 GB files)
+- ✅ **Automatic spectrum analysis** - Detects GPS satellites and jamming
+- ✅ **Position calculation** - Latitude, longitude, altitude from GNSS-SDR
+- ✅ **Jamming detection** - Visual spectrum + statistical analysis
+- ✅ **Direct API control** - Python-based SDRPlay API (no SoapySDR required)
+- ✅ **Web-based UI** - Monitor recordings and results in browser
 
-### SDRPlay
+**Recording Configuration:**
+- Frequency: 1575.42 MHz (GPS L1 C/A)
+- Sample rate: 2.048 MSPS
+- Bandwidth: 1.536 MHz (captures GPS main lobe)
+- Gain: 29 dB (prevents thermal issues)
+- Format: Complex64 (IQ)
+- Tuner: Selectable (RSPduo Tuner 1 or 2)
+- Bias-T: Enabled for active antennas
 
-**🆕 Now with Direct API Access!**
+**Workflow:**
+1. **Record** → 5-minute IQ sample capture to `.dat` file
+2. **Process** → GNSS-SDR analyzes signal, tracks satellites
+3. **Analyze** → Python generates spectrum waterfall
+4. **Display** → View results in web UI
 
-**Two modes available:**
+**Output Files:**
+- `gps_recording_YYYYMMDD_HHMMSS.dat` - Raw IQ samples (4.9 GB)
+- `gps_recording_YYYYMMDD_HHMMSS_spectrum.png` - Spectrum waterfall
+- `gps_recording_YYYYMMDD_HHMMSS_spectrum_analysis.json` - Jamming metrics
+- `gps_recording_YYYYMMDD_HHMMSS.nmea` - Position fixes
+- `gps_recording_YYYYMMDD_HHMMSS.kml` - Google Earth track
 
-#### 1. Professional Mode (GNSS-SDR Backend) - **RECOMMENDED**
-Uses industry-standard GNSS-SDR software for professional-grade signal processing:
-- ✅ Accurate C/N0 measurements (dB-Hz)
-- ✅ Real positioning (PVT solutions)
-- ✅ Better jamming detection
-- ✅ Multi-constellation support
-- ✅ Battle-tested algorithms
-- ✅ **Single-command operation** (auto-starts GNSS-SDR + SDRPlay streamer)
-- 🆕 **Direct API access** - Full control via Python (bypasses SoapySDR/gr-osmosdr)
-
-📚 **Documentation:**
-- 🆕 [Direct API Access](./gnss-sdr/README_DIRECT_API.md) - **NEW!** Full Python control of SDRplay
-- [Complete Setup Guide](./gnss-sdr/GNSS_SDR_COMPLETE_SETUP.md) - **START HERE** for full installation
-- [Quick Setup](./gnss-sdr/GNSS_SDR_SETUP.md) - Basic setup guide
-- [Troubleshooting](./gnss-sdr/GNSS_SDR_COMPLETE_SETUP.md#-troubleshooting) - Common issues and fixes
-
-**Quick Start (ONE COMMAND):**
-```bash
-# Install GNSS-SDR (one-time setup, ~30-40 min)
-cd gnss-sdr
-./install_gnss_sdr.sh
-
-# Start everything with one script!
-cd ..  # Back to repo root
-./start_all.sh direct  # 🆕 Direct API mode (RECOMMENDED - full control!)
-# OR
-./start_all.sh file    # File-based mode (default)
-# OR
-./start_all.sh live    # Live streaming mode (has Osmosdr compatibility issues)
-
-# Opens browser at http://localhost:3005 automatically
-# Go to SDRPlay Decoder page and click "Listen & Decode"
-```
-
-**Three Processing Modes:**
-- 🆕 **Direct API mode** (`./start_all.sh direct`) - **RECOMMENDED!** Full Python control, no compatibility issues
-- **File mode** (`./start_all.sh file`) - Record-then-process cycles (default, more stable)
-- **Live mode** (`./start_all.sh live`) - Real-time via Osmosdr (has setIQBalance crash issues)
-
-📖 **See:** [DIRECT_API_QUICKSTART.md](./DIRECT_API_QUICKSTART.md) for detailed direct mode guide
-
-**Alternative: File-Based Processing** (works immediately, no web UI needed)
-```bash
-cd gnss-sdr
-
-# Record 60 seconds of GPS samples
-python3 record_iq_samples.py /tmp/gps_iq_samples.dat 60
-
-# Process with GNSS-SDR
-gnss-sdr --config_file=gnss_sdr_file.conf
-
-# You should see satellite tracking messages!
-```
-
-#### 2. Raw IQ Mode (Browser Processing)
-Streams raw IQ samples to browser for JavaScript-based correlation:
-- ⚠️ Simplified algorithms
-- ⚠️ Limited accuracy
-- ⚠️ Higher bandwidth
-
-Setup: Follow [SDRPlay Quickstart](./SDRPLAY_QUICKSTART.md) and [SDRPlay Setup](./SDRPLAY_SETUP.md)
-
-Supported GNSS Constellations:
-* GPS L1 C/A (USA)
-* Galileo E1 (Europe)
-* GLONASS L1OF (Russia)
-* BeiDou B1I (China)
+**Supported Constellations:**
+- GPS L1 C/A (USA) - 1575.42 MHz
+- Galileo E1 (Europe) - 1575.42 MHz
+- GLONASS L1OF (Russia) - 1602 MHz
+- BeiDou B1I (China) - 1561.098 MHz
 
 ## References
 

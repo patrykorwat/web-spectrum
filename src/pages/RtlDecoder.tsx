@@ -23,12 +23,20 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import ButtonGroup from '@mui/material/ButtonGroup';
 import { FormControl } from '@mui/base/FormControl';
+import MuiFormControl from '@mui/material/FormControl';
+import LinearProgress from '@mui/material/LinearProgress';
+import CircularProgress from '@mui/material/CircularProgress';
 
 import { LineChart } from '@mui/x-charts/LineChart';
 
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
+import MuiRadio from '@mui/material/Radio';
+import RadioGroup from '@mui/material/RadioGroup';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import FormLabel from '@mui/material/FormLabel';
 
 import Label from '../components/Label.tsx';
 import NumberInput from '../components/NumberInput.tsx';
@@ -64,9 +72,13 @@ function RtlDecoder() {
   const [frequencyMag, setFrequencyMag] = useState<number>(1000000);
   const [biasTEnabled, setBiasTEnabled] = useState<boolean>(false);
 
+  // Bridge mode selection
+  const [bridgeMode, setBridgeMode] = useState<'rtlsdr' | 'gnss-sdr'>('gnss-sdr');
+
   // Input source selection
   const [inputSource, setInputSource] = useState<'USB' | 'WebSocket'>('USB');
-  const [websocketUrl, setWebsocketUrl] = useState<string>('ws://localhost:8765');
+  const defaultWebSocketUrl = bridgeMode === 'gnss-sdr' ? 'ws://localhost:8766' : 'ws://localhost:8765';
+  const [websocketUrl, setWebsocketUrl] = useState<string>(defaultWebSocketUrl);
   const [websocketReceiver, setWebsocketReceiver] = useState<WebSocketReceiver | null>(null);
 
   // Interference mitigation filter state
@@ -78,6 +90,24 @@ function RtlDecoder() {
 
   const [powerLevels, setPowerLevels] = useState([]);
 
+  // GPS Recording state (RTL-SDR)
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [recordingFile, setRecordingFile] = useState<string>('');
+  const [progressPhase, setProgressPhase] = useState<string>('');
+  const [progressPercent, setProgressPercent] = useState<number>(0);
+  const [progressMessage, setProgressMessage] = useState<string>('');
+  const [recordingConfig, setRecordingConfig] = useState<any>(null);
+  const [deviceInfo, setDeviceInfo] = useState<any>(null);
+
+  // Spectrum analysis results
+  const [spectrumAnalysis, setSpectrumAnalysis] = useState<any>(null);
+  const [spectrumImageUrl, setSpectrumImageUrl] = useState<string | null>(null);
+  const [waitingForSpectrum, setWaitingForSpectrum] = useState<boolean>(false);
+
+  // Jamming status
+  const [jammingStatus, setJammingStatus] = useState<any>(null);
+
   const pointsBatch = 10000;
 
   const xPoints: Array<number> = [];
@@ -87,6 +117,154 @@ function RtlDecoder() {
 
   const ismDemodulator = new IsmDemodulator();
   const [gnssDemodulator] = useState(() => new GNSSDemodulator());
+
+  // Fetch RTL-SDR GPS recording configuration on mount
+  React.useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const response = await fetch('http://localhost:3001/rtl/config');
+        if (response.ok) {
+          const config = await response.json();
+          setRecordingConfig(config);
+        }
+      } catch (error) {
+        console.error('Failed to fetch RTL-SDR recording config:', error);
+      }
+    };
+
+    const fetchDeviceInfo = async () => {
+      try {
+        const response = await fetch('http://localhost:3001/rtl/device-info');
+        if (response.ok) {
+          const info = await response.json();
+          setDeviceInfo(info);
+        }
+      } catch (error) {
+        console.error('Failed to fetch RTL-SDR device info:', error);
+      }
+    };
+
+    fetchConfig();
+    fetchDeviceInfo();
+  }, []);
+
+  // Update WebSocket URL when bridge mode changes
+  React.useEffect(() => {
+    if (!websocketReceiver?.isConnected()) {
+      const newUrl = bridgeMode === 'gnss-sdr' ? 'ws://localhost:8766' : 'ws://localhost:8765';
+      setWebsocketUrl(newUrl);
+    }
+  }, [bridgeMode, websocketReceiver]);
+
+  // RTL-SDR GPS Recording control functions
+  const startRecording = async () => {
+    try {
+      setIsRecording(true);
+      setProgressPhase('recording');
+      setProgressPercent(0);
+      setProgressMessage('Starting RTL-SDR GPS recording...');
+
+      // Reset spectrum analysis state
+      setSpectrumAnalysis(null);
+      setSpectrumImageUrl(null);
+      setWaitingForSpectrum(false);
+
+      const response = await fetch('http://localhost:3001/rtl/start-recording', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ duration: 300 }) // 5 minutes
+      });
+
+      if (!response.ok) throw new Error('Failed to start RTL-SDR recording');
+      const data = await response.json();
+      setRecordingFile(data.filename || '');
+      setProgressMessage('Recording GPS data with RTL-SDR (5 minutes)...');
+
+      // Auto-stop and process after 5 minutes
+      setTimeout(async () => {
+        setIsRecording(false);
+        setProgressPhase('');
+        setProgressMessage('✅ Recording complete! Starting processing...');
+
+        setTimeout(() => {
+          document.querySelector('[data-process-button]')?.click();
+        }, 2000);
+      }, 305000); // 5 minutes + 5 seconds buffer
+    } catch (error) {
+      console.error('RTL-SDR recording error:', error);
+      setIsRecording(false);
+      setProgressMessage(`Error: ${error}`);
+      alert(`❌ Failed to start RTL-SDR recording!\n\n${error}\n\nMake sure RTL-SDR is connected and not in use by another application.`);
+    }
+  };
+
+  const stopRecording = async () => {
+    try {
+      await fetch('http://localhost:3001/rtl/stop-recording', { method: 'POST' });
+      setIsRecording(false);
+      setProgressPhase('');
+      setProgressMessage('Recording stopped. Starting processing...');
+
+      setTimeout(() => {
+        document.querySelector('[data-process-button]')?.click();
+      }, 2000);
+    } catch (error) {
+      console.error('Stop RTL-SDR recording error:', error);
+    }
+  };
+
+  const processRecording = async () => {
+    if (!recordingFile) {
+      alert('No recording file available. Please record data first.');
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      setProgressPhase('processing');
+      setProgressPercent(0);
+      setProgressMessage('Processing GPS data with GNSS-SDR...');
+
+      const response = await fetch('http://localhost:3001/rtl/process-recording', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: recordingFile })
+      });
+
+      if (!response.ok) throw new Error('Failed to start processing');
+
+      setProgressMessage('GNSS-SDR processing in progress (this may take 5-10 minutes)...');
+
+      // Poll for completion
+      const pollProcessing = setInterval(async () => {
+        try {
+          const statusResponse = await fetch('http://localhost:3001/rtl/status');
+          if (statusResponse.ok) {
+            const status = await statusResponse.json();
+            if (status.processing && status.processing.complete) {
+              clearInterval(pollProcessing);
+              setIsProcessing(false);
+              setProgressPhase('');
+              setProgressMessage('✅ Processing complete!');
+            }
+          }
+        } catch (err) {
+          console.error('Processing status poll error:', err);
+        }
+      }, 5000);
+
+      // Timeout after 15 minutes
+      setTimeout(() => {
+        clearInterval(pollProcessing);
+        setIsProcessing(false);
+        setProgressPhase('');
+      }, 900000);
+    } catch (error) {
+      console.error('Processing error:', error);
+      setIsProcessing(false);
+      setProgressMessage(`Error: ${error}`);
+    }
+  };
 
   const download = () => {
     let lines = 'decoded,time,msg'
@@ -99,6 +277,41 @@ function RtlDecoder() {
 
 return (
   <Container maxWidth="lg">
+    {/* Bridge Mode Selector */}
+    <Box sx={{ marginBottom: '20px', marginTop: '20px' }}>
+      <MuiFormControl>
+        <FormLabel id="bridge-mode-label">Signal Processing Mode</FormLabel>
+        <RadioGroup
+          row
+          aria-labelledby="bridge-mode-label"
+          name="bridge-mode-group"
+          value={bridgeMode}
+          onChange={(event) => setBridgeMode(event.target.value as 'rtlsdr' | 'gnss-sdr')}
+        >
+          <FormControlLabel
+            value="rtlsdr"
+            control={<MuiRadio />}
+            label="Browser Processing (Raw IQ)"
+            disabled={websocketReceiver?.isConnected() || radio?.isPlaying()}
+          />
+          <FormControlLabel
+            value="gnss-sdr"
+            control={<MuiRadio />}
+            label="Professional Mode (GNSS-SDR)"
+            disabled={websocketReceiver?.isConnected() || radio?.isPlaying()}
+          />
+        </RadioGroup>
+        <Typography variant="caption" color="text.secondary" sx={{ marginTop: '5px' }}>
+          {bridgeMode === 'rtlsdr'
+            ? '⚠️ Browser Processing: Simplified algorithms, high bandwidth, real-time correlation'
+            : '✅ Professional: Uses GNSS-SDR for accurate GPS tracking, C/N0 measurements, and jamming detection'
+          }
+        </Typography>
+      </MuiFormControl>
+    </Box>
+
+    {/* Browser Processing Controls - Only show in rtlsdr mode */}
+    {bridgeMode === 'rtlsdr' && (
     <Box display="flex"
       justifyContent="center"
       alignItems="center"
@@ -505,6 +718,177 @@ return (
       )}
     </FormControl>
   </Box>
+  )}
+
+  {/* RTL-SDR GPS Recording & Position Fix - Professional Mode Only */}
+  {bridgeMode === 'gnss-sdr' && (
+    <Box sx={{ marginBottom: '20px', marginTop: '20px', padding: '20px', backgroundColor: 'rgba(156, 39, 176, 0.08)', borderRadius: '8px', border: '1px solid rgba(156, 39, 176, 0.3)' }}>
+      <Typography variant="h6" sx={{ marginBottom: '15px', color: 'secondary.main' }}>
+        🎙️ RTL-SDR GPS Recording & Position Fix
+      </Typography>
+
+      <Typography variant="body2" sx={{ marginBottom: '15px', color: 'text.secondary' }}>
+        Record GPS L1 signals with RTL-SDR (8-bit IQ), then process with GNSS-SDR for position fix.
+        <br />
+        RTL-SDR provides 80% of professional capability at $30-40 (vs $200-300 SDRplay).
+      </Typography>
+
+      {/* Device Info */}
+      {deviceInfo && deviceInfo.detected && (
+        <Box sx={{ marginBottom: '15px', padding: '12px', backgroundColor: 'rgba(33, 150, 243, 0.1)', borderRadius: '4px', border: '1px solid rgba(33, 150, 243, 0.3)' }}>
+          <Typography variant="subtitle2" sx={{ marginBottom: '8px', fontWeight: 'bold', color: 'info.main' }}>
+            📡 RTL-SDR Device Detected
+          </Typography>
+          <Typography variant="body2">
+            <strong>Model:</strong> {deviceInfo.model || 'RTL2832U'}
+            <br />
+            <strong>Tuner:</strong> {deviceInfo.tuner || 'R820T2'}
+            <br />
+            <strong>Bias-T:</strong> {deviceInfo.has_bias_t ? 'Available' : 'Not available'}
+          </Typography>
+        </Box>
+      )}
+
+      {/* Recording Configuration */}
+      {recordingConfig ? (
+        <Box sx={{ marginBottom: '15px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.15)', borderRadius: '4px', border: '1px solid rgba(156, 39, 176, 0.2)' }}>
+          <Typography variant="subtitle2" sx={{ marginBottom: '8px', fontWeight: 'bold', color: 'secondary.main' }}>
+            📋 Recording Configuration
+          </Typography>
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.875rem' }}>
+            <Box><strong>Frequency:</strong> {recordingConfig.frequency_mhz || 1575.42} MHz (GPS L1)</Box>
+            <Box><strong>Sample Rate:</strong> {recordingConfig.sample_rate_msps || 2.048} MSPS</Box>
+            <Box><strong>Format:</strong> 8-bit IQ (RTL-SDR native)</Box>
+            <Box><strong>Bandwidth:</strong> ~{recordingConfig.bandwidth_mhz || 2} MHz</Box>
+            <Box><strong>Duration:</strong> 5 minutes (default)</Box>
+            <Box><strong>File Size:</strong> ~{recordingConfig.file_size_mb || 1230} MB</Box>
+            <Box><strong>Bias-T:</strong> {recordingConfig.bias_tee || 'ENABLED'}</Box>
+            <Box><strong>Active Antenna:</strong> Required (powered)</Box>
+          </Box>
+        </Box>
+      ) : (
+        <Box sx={{ marginBottom: '15px', padding: '12px', backgroundColor: 'rgba(0, 0, 0, 0.15)', borderRadius: '4px', border: '1px solid rgba(156, 39, 176, 0.2)' }}>
+          <Typography variant="body2" color="text.secondary">Loading RTL-SDR configuration...</Typography>
+        </Box>
+      )}
+
+      {/* Recording Controls */}
+      <ButtonGroup variant="contained" sx={{ marginBottom: '10px' }}>
+        <Button
+          onClick={startRecording}
+          disabled={isRecording || isProcessing}
+          color="error"
+          sx={{ textTransform: 'none' }}
+        >
+          ⏺ Start Recording (5 min)
+        </Button>
+        <Button
+          onClick={stopRecording}
+          disabled={!isRecording}
+          sx={{ textTransform: 'none' }}
+        >
+          ⏹ Stop
+        </Button>
+        <Button
+          onClick={processRecording}
+          disabled={isRecording || isProcessing || !recordingFile}
+          color="success"
+          sx={{ textTransform: 'none' }}
+          data-process-button
+        >
+          🔄 Process & Get Position
+        </Button>
+      </ButtonGroup>
+
+      {/* Progress Display */}
+      {(progressPhase === 'recording' || progressPhase === 'processing') && (
+        <Box sx={{ marginTop: '15px', padding: '15px', backgroundColor: 'rgba(33, 150, 243, 0.1)', borderRadius: '4px', border: '2px solid rgba(33, 150, 243, 0.5)' }}>
+          <Typography variant="subtitle2" sx={{ marginBottom: '10px', fontWeight: 'bold', color: 'info.main' }}>
+            🔄 {progressPhase === 'recording' ? 'RTL-SDR Recording' : 'GNSS-SDR Processing'}
+          </Typography>
+          <LinearProgress
+            variant={progressPercent > 0 ? 'determinate' : 'indeterminate'}
+            value={progressPercent}
+            sx={{ marginBottom: '10px' }}
+          />
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+            {progressMessage}
+          </Typography>
+          {recordingFile && (
+            <Typography variant="caption" sx={{ display: 'block', marginTop: '5px', fontFamily: 'monospace', color: 'text.secondary' }}>
+              File: {recordingFile}
+            </Typography>
+          )}
+        </Box>
+      )}
+
+      {/* Waiting for Spectrum */}
+      {waitingForSpectrum && !spectrumImageUrl && (
+        <Box sx={{ marginTop: '15px', padding: '15px', backgroundColor: 'rgba(255, 165, 0, 0.1)', borderRadius: '4px', border: '1px solid rgba(255, 165, 0, 0.3)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <CircularProgress size={30} sx={{ color: 'orange', marginRight: '15px' }} />
+            <Box>
+              <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'warning.main' }}>
+                Generating Spectrum Analysis...
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                This may take up to 10 minutes. Please wait...
+              </Typography>
+            </Box>
+          </Box>
+        </Box>
+      )}
+
+      {/* Spectrum Image */}
+      {spectrumImageUrl && (
+        <Box sx={{ marginTop: '15px' }}>
+          <Typography variant="subtitle2" sx={{ marginBottom: '10px', fontWeight: 'bold' }}>
+            📊 GPS L1 Spectrum (Jamming Detection)
+          </Typography>
+          <img
+            src={spectrumImageUrl}
+            alt="GPS Spectrum"
+            style={{ width: '100%', maxWidth: '1000px', borderRadius: '4px', border: '1px solid rgba(156, 39, 176, 0.3)' }}
+            onLoad={() => console.log('RTL-SDR spectrum image loaded')}
+            onError={(e) => console.error('RTL-SDR spectrum image failed to load:', e)}
+          />
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ marginTop: '5px' }}>
+            Horizontal lines = Jamming bursts | Vertical lines = GPS satellites (Doppler-shifted)
+          </Typography>
+        </Box>
+      )}
+
+      {/* Position Fix Display */}
+      {decodedItems[0]?.msg?.positionFix && (
+        <Box sx={{ marginTop: '15px', padding: '15px', border: '2px solid #4CAF50', borderRadius: '8px', backgroundColor: 'rgba(76, 175, 80, 0.05)' }}>
+          <Typography variant="h6" sx={{ marginBottom: '10px', fontSize: '1em', color: '#4CAF50' }}>
+            📍 Position Fix (RTL-SDR + GNSS-SDR)
+          </Typography>
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <Box>
+              <strong>Latitude:</strong> {decodedItems[0].msg.positionFix.lat.toFixed(6)}°
+            </Box>
+            <Box>
+              <strong>Longitude:</strong> {decodedItems[0].msg.positionFix.lon.toFixed(6)}°
+            </Box>
+            <Box>
+              <strong>Altitude:</strong> {decodedItems[0].msg.positionFix.alt.toFixed(1)} m
+            </Box>
+            <Box>
+              <strong>Accuracy:</strong> {decodedItems[0].msg.positionFix.accuracy ? decodedItems[0].msg.positionFix.accuracy.toFixed(1) : 'N/A'} m
+            </Box>
+            <Box>
+              <strong>Satellites:</strong> {decodedItems[0].msg.positionFix.numSatellites || 'N/A'}
+            </Box>
+            <Box>
+              <strong>Fix Type:</strong> {decodedItems[0].msg.positionFix.fixType || '3D'}
+            </Box>
+          </Box>
+        </Box>
+      )}
+    </Box>
+  )}
+
   <Box
     justifyContent='center'
   >

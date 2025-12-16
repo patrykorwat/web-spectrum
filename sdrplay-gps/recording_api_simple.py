@@ -64,6 +64,42 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
         """Handle CORS preflight"""
         self._set_headers()
 
+    def do_HEAD(self):
+        """Handle HEAD requests (same as GET but without body)"""
+        # For HEAD requests, we need to check if file exists and send headers only
+        if self.path.startswith('/gnss/recordings/'):
+            filename = self.path.split('/gnss/recordings/')[-1]
+            # Remove query parameters (cache busting timestamps)
+            filename = filename.split('?')[0]
+            filepath = os.path.join(RECORDINGS_DIR, filename)
+
+            if os.path.exists(filepath) and os.path.isfile(filepath):
+                # Determine content type
+                if filename.endswith('.json'):
+                    content_type = 'application/json'
+                elif filename.endswith('.png'):
+                    content_type = 'image/png'
+                elif filename.endswith('.txt') or filename.endswith('.log'):
+                    content_type = 'text/plain'
+                else:
+                    content_type = 'application/octet-stream'
+
+                # Send headers only (no body for HEAD)
+                file_size = os.path.getsize(filepath)
+                self.send_response(200)
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Length', file_size)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+            else:
+                self.send_response(404)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+        else:
+            # For other endpoints, just send headers (no body)
+            self._set_headers()
+
     def do_GET(self):
         """Handle GET requests"""
         global recording_process, processing_process, current_recording, recording_start_time, processing_start_time, processing_status
@@ -150,6 +186,8 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
         elif self.path.startswith('/gnss/recordings/'):
             # Serve individual files (spectrum analysis, plots, etc.)
             filename = self.path.split('/gnss/recordings/')[-1]
+            # Remove query parameters (cache busting timestamps like ?t=123456789)
+            filename = filename.split('?')[0]
             filepath = os.path.join(RECORDINGS_DIR, filename)
 
             if os.path.exists(filepath) and os.path.isfile(filepath):
@@ -574,7 +612,7 @@ PVT.monitor_udp_port=1234
                                 '--duration', '60',
                                 '--output', spectrum_output,
                                 '--plot', spectrum_plot
-                            ], capture_output=True, text=True, timeout=300)  # 5 min timeout
+                            ], capture_output=True, text=True, timeout=600)  # 10 min timeout
 
                             # Log any errors
                             if result.returncode != 0:
