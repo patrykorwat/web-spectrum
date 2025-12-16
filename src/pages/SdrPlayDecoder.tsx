@@ -675,16 +675,17 @@ return (
                       setJammingStatus(result.jamming);
                     }
 
-                    // Update satellite history for chart
+                    // Update satellite history for chart and track locked/lost satellites
                     setSatelliteHistory(prevHistory => {
-                      const satCount = result.satellites.length;
-                      const avgCN0 = satCount > 0
-                        ? result.satellites.reduce((sum: number, sat: any) => sum + (sat.cn0 || 0), 0) / satCount
+                      const trackingSats = result.satellites.filter((s: any) => s.state === 'TRACKING');
+                      const trackingCount = trackingSats.length;
+                      const avgCN0 = trackingCount > 0
+                        ? trackingSats.reduce((sum: number, sat: any) => sum + (sat.cn0 || 0), 0) / trackingCount
                         : 0;
 
                       const newPoint = {
                         time: Date.now(),
-                        count: satCount,
+                        count: trackingCount,
                         avgCN0: avgCN0
                       };
 
@@ -1279,29 +1280,42 @@ return (
               📈 Satellite Tracking History
             </Typography>
             <LineChart
+              skipAnimation={true}
               width={900}
               height={200}
               series={[
                 {
-                  data: satelliteHistory.slice().reverse().map(p => p.count),
-                  label: 'Satellites',
-                  color: '#4CAF50',
-                  showMark: false
-                },
-                {
                   data: satelliteHistory.slice().reverse().map(p => p.avgCN0),
                   label: 'Avg C/N0 (dB-Hz)',
                   color: '#2196F3',
-                  showMark: false
+                  showMark: false,
+                  yAxisKey: 'leftAxis'
+                },
+                {
+                  data: satelliteHistory.slice().reverse().map(p => p.count),
+                  label: 'Satellites',
+                  color: '#4CAF50',
+                  showMark: false,
+                  yAxisKey: 'rightAxis'
                 }
               ]}
               xAxis={[{
                 data: satelliteHistory.slice().reverse().map((_, i) => i),
                 label: 'Time (recent →)'
               }]}
-              yAxis={[{
-                label: 'Satellites / C/N0 (dB-Hz)'
-              }]}
+              yAxis={[
+                {
+                  id: 'leftAxis',
+                  scaleType: 'linear',
+                  label: 'C/N0 (dB-Hz)'
+                },
+                {
+                  id: 'rightAxis',
+                  scaleType: 'linear',
+                  label: 'Satellites'
+                }
+              ]}
+              rightAxis="rightAxis"
               slotProps={{
                 legend: {
                   direction: 'row',
@@ -1309,10 +1323,12 @@ return (
                   padding: 0
                 }
               }}
+              margin={{ left: 60, right: 60, top: 40, bottom: 40 }}
             />
             <Typography variant="caption" sx={{ display: 'block', marginTop: '5px', color: 'text.secondary', textAlign: 'center' }}>
               Shows last {satelliteHistory.length} updates (~{Math.round(satelliteHistory.length / 60)} min of data)
             </Typography>
+
           </Box>
         )}
       </Box>
