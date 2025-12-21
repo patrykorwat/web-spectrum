@@ -85,43 +85,45 @@ npm start
 # Opens browser at http://localhost:3005
 ```
 
-### Start Backend Services
+### Start Backend Services (Unified for Both Devices)
 
-**For SDRPlay GPS Recording:**
+The recording backend now supports **both RTL-SDR and SDRPlay** automatically:
+
 ```bash
-# Terminal 1: Start recording API server
+# Terminal 1: Start unified recording API server
 cd sdrplay-gps
 python3 recording_api_simple.py
 # Listens on http://localhost:3001
+# Auto-detects and supports both RTL-SDR and SDRPlay devices
 
-# Terminal 2: Start GNSS-SDR bridge
+# Terminal 2: Start GNSS-SDR bridge (for live position tracking)
 python3 gnss_sdr_bridge.py
 # Listens on ws://localhost:8766
 ```
 
-**For RTL-SDR GPS Recording:**
-```bash
-# Terminal 1: Start recording API server
-cd rtl-sdr-gps
-python3 recording_api_simple.py
-# Listens on http://localhost:3001
-
-# Terminal 2: Start GNSS-SDR bridge
-python3 gnss_sdr_bridge.py
-# Listens on ws://localhost:8766
-```
+The backend automatically:
+- ✅ Detects which SDR device is available (RTL-SDR or SDRplay)
+- ✅ Routes to the correct recording script (`rtlsdr_direct.py` or `sdrplay_direct.py`)
+- ✅ Converts RTL-SDR uint8 format to complex64 for GNSS-SDR compatibility
+- ✅ Processes recordings with GNSS-SDR and generates spectrum analysis
 
 ### Using the GPS Recording Feature
 
 1. **Open browser** at [http://localhost:3005](http://localhost:3005)
 2. **Navigate** to SDRPlay or RTL-SDR Decoder page
-3. **Select mode**: "Professional Mode (GNSS-SDR)"
-4. **Start recording**: Click "⏺ Start Recording (5 min)"
-5. **Wait for processing**: Spectrum analysis runs automatically
+3. **Configure duration**: Select recording duration (30s to 10m)
+4. **Start recording**: Click "⏺ Start Recording"
+5. **Wait for processing**: GNSS-SDR processes automatically
 6. **View results**:
    - Spectrum waterfall showing GPS signals and jamming
+   - Jamming detection analysis (pulse, sweep, noise, narrowband)
    - Position fix (latitude, longitude, altitude)
    - Satellite tracking status
+
+**Recording Durations:**
+- Quick test: 30-60 seconds (~468-937 MB)
+- Standard: 2-5 minutes (~1.9-4.7 GB)
+- Maximum: Up to 10 minutes (~9.4 GB)
 
 ## Device-Specific Features
 
@@ -142,6 +144,7 @@ python3 gnss_sdr_bridge.py
 
 ![decode1](rtl-sdr-ads-b.jpg)
 ![decode2](rtl-sdr-ism.png)
+![decode3](rtl-sdr-gps.png)
 
 **Browser Processing Mode:**
 Direct in-browser signal decoding:
@@ -150,11 +153,38 @@ Direct in-browser signal decoding:
 - **Basic GNSS** - GPS L1, Galileo E1, GLONASS L1OF, BeiDou B1I
 
 **Professional Mode (GNSS-SDR):**
-- Record GPS signals to file (2.048 MSPS)
-- Process with GNSS-SDR for satellite tracking
-- Spectrum analysis with jamming detection
-- Position fix calculation
-- Works with any RTL-SDR dongle ($25-40)
+
+RTL-SDR dongles now work with GNSS-SDR for professional GPS signal analysis:
+
+**Features:**
+- ✅ **Configurable recordings** - 30s to 10 minutes (468 MB to 9.4 GB)
+- ✅ **Automatic spectrum analysis** - Detects GPS satellites and jamming
+- ✅ **Position calculation** - Latitude, longitude, altitude from GNSS-SDR
+- ✅ **Jamming detection** - 5 types: pulse, sweep, noise, narrowband, meaconing
+- ✅ **Format conversion** - Automatically converts uint8 to complex64
+- ✅ **Web-based UI** - Monitor recordings and results in browser
+- ✅ **Works with any RTL-SDR dongle** - $25-40 (RTL-SDR Blog V4 recommended)
+
+**Recording Configuration:**
+- Frequency: 1575.42 MHz (GPS L1 C/A)
+- Sample rate: 2.048 MSPS
+- Gain: 40 dB (configurable)
+- Format: Complex64 (IQ) - auto-converted from RTL-SDR's uint8
+- Works with active or passive GPS antennas
+
+**Workflow:**
+1. **Configure** → Select duration (30s-10m)
+2. **Record** → RTL-SDR captures IQ samples to `.dat` file
+3. **Process** → GNSS-SDR analyzes signal, tracks satellites
+4. **Analyze** → Python generates spectrum waterfall and jamming metrics
+5. **Display** → View results in web UI
+
+**Output Files:**
+- `gps_recording_YYYYMMDD_HHMMSS.dat` - Raw IQ samples (complex64)
+- `gps_recording_YYYYMMDD_HHMMSS_spectrum.png` - Spectrum waterfall
+- `gps_recording_YYYYMMDD_HHMMSS_spectrum_analysis.json` - Jamming metrics
+- `gps_recording_YYYYMMDD_HHMMSS.nmea` - Position fixes (if satellites tracked)
+- `gps_recording_YYYYMMDD_HHMMSS.kml` - Google Earth track (if satellites tracked)
 
 ### SDRPlay (RSPduo, RSP1A, etc.)
 
@@ -165,12 +195,13 @@ Direct in-browser signal decoding:
 SDRPlay devices work with GNSS-SDR for professional-grade GPS signal analysis:
 
 **Features:**
-- ✅ **5-minute GPS recordings** at 2.048 MSPS (4.9 GB files)
+- ✅ **Configurable recordings** - 1 to 10 minutes (937 MB to 9.4 GB)
 - ✅ **Automatic spectrum analysis** - Detects GPS satellites and jamming
 - ✅ **Position calculation** - Latitude, longitude, altitude from GNSS-SDR
-- ✅ **Jamming detection** - Visual spectrum + statistical analysis
+- ✅ **Jamming detection** - 5 types: pulse, sweep, noise, narrowband, meaconing
 - ✅ **Direct API control** - Python-based SDRPlay API (no SoapySDR required)
 - ✅ **Web-based UI** - Monitor recordings and results in browser
+- ✅ **Dual-tuner support** - RSPduo Port 1 or Port 2 selection
 
 **Recording Configuration:**
 - Frequency: 1575.42 MHz (GPS L1 C/A)
@@ -182,17 +213,18 @@ SDRPlay devices work with GNSS-SDR for professional-grade GPS signal analysis:
 - Bias-T: Enabled for active antennas
 
 **Workflow:**
-1. **Record** → 5-minute IQ sample capture to `.dat` file
-2. **Process** → GNSS-SDR analyzes signal, tracks satellites
-3. **Analyze** → Python generates spectrum waterfall
-4. **Display** → View results in web UI
+1. **Configure** → Select duration (1m-10m) and tuner port
+2. **Record** → SDRplay captures IQ samples to `.dat` file
+3. **Process** → GNSS-SDR analyzes signal, tracks satellites
+4. **Analyze** → Python generates spectrum waterfall and jamming metrics
+5. **Display** → View results in web UI
 
 **Output Files:**
-- `gps_recording_YYYYMMDD_HHMMSS.dat` - Raw IQ samples (4.9 GB)
+- `gps_recording_YYYYMMDD_HHMMSS.dat` - Raw IQ samples (complex64)
 - `gps_recording_YYYYMMDD_HHMMSS_spectrum.png` - Spectrum waterfall
 - `gps_recording_YYYYMMDD_HHMMSS_spectrum_analysis.json` - Jamming metrics
-- `gps_recording_YYYYMMDD_HHMMSS.nmea` - Position fixes
-- `gps_recording_YYYYMMDD_HHMMSS.kml` - Google Earth track
+- `gps_recording_YYYYMMDD_HHMMSS.nmea` - Position fixes (if satellites tracked)
+- `gps_recording_YYYYMMDD_HHMMSS.kml` - Google Earth track (if satellites tracked)
 
 **Supported Constellations:**
 - GPS L1 C/A (USA) - 1575.42 MHz

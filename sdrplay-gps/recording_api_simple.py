@@ -48,6 +48,74 @@ RECORDING_CONFIG = {
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
 
+def detect_available_device():
+    """
+    Detect which SDR device is available (SDRplay or RTL-SDR)
+
+    Returns:
+        tuple: (device_type, device_info)
+            device_type: 'sdrplay', 'rtlsdr', or None
+            device_info: dict with device details
+    """
+    # Try SDRplay first
+    detect_script = os.path.join(SCRIPT_DIR, 'detect_sdrplay.py')
+    try:
+        result = subprocess.run(
+            ['python3', detect_script],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        device_info = json.loads(result.stdout)
+        if device_info.get('success') and device_info.get('count', 0) > 0:
+            return ('sdrplay', device_info)
+    except Exception as e:
+        print(f"SDRplay detection failed: {e}")
+
+    # Try RTL-SDR
+    try:
+        result = subprocess.run(
+            ['rtl_test', '-t'],
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        # RTL-SDR outputs to stderr, not stdout
+        output = result.stderr if result.stderr else result.stdout
+
+        if result.returncode == 0 and 'Found' in output:
+            # Parse RTL-SDR device info
+            lines = output.split('\n')
+            device_count = 0
+            devices = []
+
+            for line in lines:
+                if line.startswith('Found') and 'device' in line:
+                    # Extract device count
+                    import re
+                    match = re.search(r'Found (\d+) device', line)
+                    if match:
+                        device_count = int(match.group(1))
+                elif line.strip().startswith('0:'):
+                    # Extract first device info
+                    devices.append({
+                        'index': 0,
+                        'name': line.split(':', 1)[1].strip() if ':' in line else 'RTL-SDR'
+                    })
+
+            if device_count > 0:
+                return ('rtlsdr', {
+                    'success': True,
+                    'count': device_count,
+                    'devices': devices,
+                    'type': 'RTL-SDR'
+                })
+    except Exception as e:
+        print(f"RTL-SDR detection failed: {e}")
+
+    return (None, {'success': False, 'count': 0, 'devices': [], 'error': 'No SDR device found'})
+
+
 class RecordingAPIHandler(BaseHTTPRequestHandler):
     """HTTP request handler for GPS recording API"""
 
@@ -164,23 +232,75 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(RECORDING_CONFIG).encode())
 
         elif self.path == '/gnss/device-info':
-            # Detect SDRplay device
-            detect_script = os.path.join(SCRIPT_DIR, 'detect_sdrplay.py')
+            # Return info for ALL available SDR devices (SDRplay AND RTL-SDR)
             try:
-                result = subprocess.run(
-                    ['python3', detect_script],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                device_info = json.loads(result.stdout)
+                result = {
+                    'success': True,
+                    'sdrplay': None,
+                    'rtlsdr': None
+                }
+
+                # Check SDRplay
+                detect_script = os.path.join(SCRIPT_DIR, 'detect_sdrplay.py')
+                try:
+                    sdr_result = subprocess.run(
+                        ['python3', detect_script],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    sdrplay_info = json.loads(sdr_result.stdout)
+                    if sdrplay_info.get('success') and sdrplay_info.get('count', 0) > 0:
+                        result['sdrplay'] = sdrplay_info
+                except Exception as e:
+                    print(f"SDRplay detection failed: {e}")
+
+                # Check RTL-SDR
+                try:
+                    rtl_result = subprocess.run(
+                        ['rtl_test', '-t'],
+                        capture_output=True,
+                        text=True,
+                        timeout=3
+                    )
+                    output = rtl_result.stderr if rtl_result.stderr else rtl_result.stdout
+
+                    if rtl_result.returncode == 0 and 'Found' in output:
+                        lines = output.split('\n')
+                        device_count = 0
+                        devices = []
+
+                        for line in lines:
+                            if line.startswith('Found') and 'device' in line:
+                                import re
+                                match = re.search(r'Found (\d+) device', line)
+                                if match:
+                                    device_count = int(match.group(1))
+                            elif line.strip().startswith('0:'):
+                                devices.append({
+                                    'index': 0,
+                                    'name': line.split(':', 1)[1].strip() if ':' in line else 'RTL-SDR'
+                                })
+
+                        if device_count > 0:
+                            result['rtlsdr'] = {
+                                'success': True,
+                                'count': device_count,
+                                'devices': devices,
+                                'type': 'RTL-SDR'
+                            }
+                except Exception as e:
+                    print(f"RTL-SDR detection failed: {e}")
+
                 self._set_headers()
-                self.wfile.write(json.dumps(device_info).encode())
+                self.wfile.write(json.dumps(result).encode())
+
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({
                     'error': f'Device detection failed: {str(e)}',
-                    'devices': []
+                    'sdrplay': None,
+                    'rtlsdr': None
                 }).encode())
 
         elif self.path.startswith('/gnss/recordings/'):
@@ -263,6 +383,8 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
                 duration = data.get('duration', RECORDING_CONFIG['duration_default'])
                 # Allow tuner selection from request, fallback to config default
                 tuner = data.get('tuner', RECORDING_CONFIG['tuner'])
+                # NEW: Explicit device type selection from request
+                device_type = data.get('device_type', 'sdrplay')  # Default to sdrplay for backward compatibility
 
                 if recording_process and recording_process.poll() is None:
                     self._set_headers(400)
@@ -272,13 +394,29 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
                     }).encode())
                     return
 
+                # Validate device type
+                if device_type not in ['sdrplay', 'rtlsdr']:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({
+                        'success': False,
+                        'error': f'Invalid device_type: {device_type}. Must be "sdrplay" or "rtlsdr"'
+                    }).encode())
+                    return
+
                 # Generate filename
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 filename = f"gps_recording_{timestamp}.dat"
                 filepath = os.path.join(RECORDINGS_DIR, filename)
 
+                # Select recording script based on device type
+                if device_type == 'sdrplay':
+                    record_script = os.path.join(SCRIPT_DIR, 'sdrplay_direct.py')
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Using SDRplay device for recording")
+                elif device_type == 'rtlsdr':
+                    record_script = os.path.join(SCRIPT_DIR, 'rtlsdr_direct.py')
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Using RTL-SDR device for recording")
+
                 # Start recording
-                record_script = os.path.join(SCRIPT_DIR, 'sdrplay_direct.py')
                 env = os.environ.copy()
                 env['DYLD_LIBRARY_PATH'] = '/usr/local/lib:' + env.get('DYLD_LIBRARY_PATH', '')
                 env['PYTHONUNBUFFERED'] = '1'
@@ -309,6 +447,7 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
                     'filename': filename,
                     'filepath': filepath,
                     'duration': duration,
+                    'device_type': device_type,
                     'started_at': timestamp
                 }).encode())
 

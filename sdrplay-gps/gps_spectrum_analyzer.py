@@ -12,7 +12,7 @@ Detects:
 Usage:
     python3 gps_spectrum_analyzer.py <recording.dat> [options]
 
-Author: Generated for Gdańsk GPS jamming analysis (Kaliningrad threat)
+Author: GPS Spectrum Analyzer for GNSS jamming detection
 """
 
 import numpy as np
@@ -467,8 +467,6 @@ class GPSSpectrumAnalyzer:
             'analysis': {
                 'sample_rate': self.sample_rate,
                 'center_frequency': self.center_freq,
-                'location': 'Gdańsk, Poland',
-                'threat_source': 'Russian military (Kaliningrad, ~150-200 km)',
             },
             'detections': results,
             'summary': {
@@ -535,8 +533,6 @@ Detection capabilities:
     print("GPS SPECTRUM ANALYZER - JAMMING DETECTION")
     print("=" * 70)
     print(f"\nInput: {input_file}")
-    print(f"Location context: Gdańsk, Poland")
-    print(f"Known threat: Russian jamming from Kaliningrad (~150-200 km)")
     print("")
 
     # Initialize analyzer

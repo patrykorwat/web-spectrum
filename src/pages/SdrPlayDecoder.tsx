@@ -114,6 +114,7 @@ function SdrPlayDecoder() {
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [recordingFile, setRecordingFile] = useState<string>('');
+  const [recordingDuration, setRecordingDuration] = useState<number>(300); // Default 300 seconds (5 min)
 
   // Recording configuration from server
   const [recordingConfig, setRecordingConfig] = useState<any>(null);
@@ -219,7 +220,8 @@ function SdrPlayDecoder() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          duration: 300, // 5 minutes
+          duration: recordingDuration,  // Use configured duration
+          device_type: 'sdrplay',  // Explicitly use SDRplay device
           tuner: selectedPort // Pass selected port to backend
         })
       });
@@ -227,7 +229,12 @@ function SdrPlayDecoder() {
       if (!response.ok) throw new Error('Failed to start recording');
       const data = await response.json();
       setRecordingFile(data.filename || '');
-      setProgressMessage('Recording GPS data (5 minutes)...');
+      const durationMinutes = Math.floor(recordingDuration / 60);
+      const durationSeconds = recordingDuration % 60;
+      const durationText = durationMinutes > 0
+        ? `${durationMinutes}m ${durationSeconds}s`
+        : `${durationSeconds}s`;
+      setProgressMessage(`Recording GPS data (${durationText})...`);
 
       // Poll for recording errors (check every 5 seconds)
       const recordingPollInterval = setInterval(async () => {
@@ -259,7 +266,7 @@ function SdrPlayDecoder() {
         setTimeout(() => {
           document.querySelector('[data-process-button]')?.click();
         }, 2000); // Wait 2 seconds for file to be fully written
-      }, 305000); // 5 minutes + 5 seconds buffer
+      }, (recordingDuration + 5) * 1000); // Duration + 5 seconds buffer
     } catch (error) {
       console.error('Recording error:', error);
       setIsRecording(false);
@@ -984,6 +991,48 @@ return (
           </Box>
         )}
 
+        {/* Recording Duration Configuration */}
+        <Box sx={{ marginBottom: '15px' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+            <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+              Recording Duration:
+            </Typography>
+            <TextField
+              type="number"
+              value={recordingDuration}
+              onChange={(e) => setRecordingDuration(Math.max(5, Math.min(600, parseInt(e.target.value) || 300)))}
+              disabled={isRecording || isProcessing}
+              size="small"
+              sx={{ width: '100px' }}
+              inputProps={{ min: 5, max: 600, step: 5 }}
+            />
+            <Typography variant="body2" color="text.secondary">
+              seconds (~{Math.round(recordingDuration * 15.6)} MB)
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: '32px' }}>
+              Quick select:
+            </Typography>
+            {[60, 120, 300, 600].map((duration) => (
+              <Button
+                key={duration}
+                size="small"
+                variant="outlined"
+                onClick={() => setRecordingDuration(duration)}
+                disabled={isRecording || isProcessing}
+                sx={{
+                  textTransform: 'none',
+                  minWidth: '60px',
+                  backgroundColor: recordingDuration === duration ? 'rgba(156, 39, 176, 0.1)' : 'transparent'
+                }}
+              >
+                {duration < 60 ? `${duration}s` : `${duration / 60}m`}
+              </Button>
+            ))}
+          </Box>
+        </Box>
+
         {/* Recording Controls */}
         <ButtonGroup variant="contained" sx={{ marginBottom: '10px' }}>
           <Button
@@ -992,7 +1041,7 @@ return (
             color="error"
             sx={{ textTransform: 'none' }}
           >
-            ⏺ Start Recording (5 min)
+            ⏺ Start Recording ({recordingDuration < 60 ? `${recordingDuration}s` : `${Math.floor(recordingDuration / 60)}m ${recordingDuration % 60}s`})
           </Button>
           <Button
             onClick={stopRecording}

@@ -94,6 +94,7 @@ function RtlDecoder() {
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [recordingFile, setRecordingFile] = useState<string>('');
+  const [recordingDuration, setRecordingDuration] = useState<number>(60); // Default 60 seconds
   const [progressPhase, setProgressPhase] = useState<string>('');
   const [progressPercent, setProgressPercent] = useState<number>(0);
   const [progressMessage, setProgressMessage] = useState<string>('');
@@ -122,7 +123,7 @@ function RtlDecoder() {
   React.useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const response = await fetch('http://localhost:3001/rtl/config');
+        const response = await fetch('http://localhost:3001/gnss/config');
         if (response.ok) {
           const config = await response.json();
           setRecordingConfig(config);
@@ -134,7 +135,7 @@ function RtlDecoder() {
 
     const fetchDeviceInfo = async () => {
       try {
-        const response = await fetch('http://localhost:3001/rtl/device-info');
+        const response = await fetch('http://localhost:3001/gnss/device-info');
         if (response.ok) {
           const info = await response.json();
           setDeviceInfo(info);
@@ -169,18 +170,26 @@ function RtlDecoder() {
       setSpectrumImageUrl(null);
       setWaitingForSpectrum(false);
 
-      const response = await fetch('http://localhost:3001/rtl/start-recording', {
+      const response = await fetch('http://localhost:3001/gnss/start-recording', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ duration: 300 }) // 5 minutes
+        body: JSON.stringify({
+          duration: recordingDuration,  // Use configured duration
+          device_type: 'rtlsdr'  // Explicitly use RTL-SDR device
+        })
       });
 
       if (!response.ok) throw new Error('Failed to start RTL-SDR recording');
       const data = await response.json();
       setRecordingFile(data.filename || '');
-      setProgressMessage('Recording GPS data with RTL-SDR (5 minutes)...');
+      const durationMinutes = Math.floor(recordingDuration / 60);
+      const durationSeconds = recordingDuration % 60;
+      const durationText = durationMinutes > 0
+        ? `${durationMinutes}m ${durationSeconds}s`
+        : `${durationSeconds}s`;
+      setProgressMessage(`Recording GPS data with RTL-SDR (${durationText})...`);
 
-      // Auto-stop and process after 5 minutes
+      // Auto-stop and process after recording duration
       setTimeout(async () => {
         setIsRecording(false);
         setProgressPhase('');
@@ -189,7 +198,7 @@ function RtlDecoder() {
         setTimeout(() => {
           document.querySelector('[data-process-button]')?.click();
         }, 2000);
-      }, 305000); // 5 minutes + 5 seconds buffer
+      }, (recordingDuration + 5) * 1000); // Duration + 5 seconds buffer
     } catch (error) {
       console.error('RTL-SDR recording error:', error);
       setIsRecording(false);
@@ -200,7 +209,7 @@ function RtlDecoder() {
 
   const stopRecording = async () => {
     try {
-      await fetch('http://localhost:3001/rtl/stop-recording', { method: 'POST' });
+      await fetch('http://localhost:3001/gnss/stop-recording', { method: 'POST' });
       setIsRecording(false);
       setProgressPhase('');
       setProgressMessage('Recording stopped. Starting processing...');
@@ -224,8 +233,9 @@ function RtlDecoder() {
       setProgressPhase('processing');
       setProgressPercent(0);
       setProgressMessage('Processing GPS data with GNSS-SDR...');
+      setWaitingForSpectrum(true);  // Show waiting for spectrum message
 
-      const response = await fetch('http://localhost:3001/rtl/process-recording', {
+      const response = await fetch('http://localhost:3001/gnss/process-recording', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename: recordingFile })
@@ -235,12 +245,38 @@ function RtlDecoder() {
 
       setProgressMessage('GNSS-SDR processing in progress (this may take 5-10 minutes)...');
 
-      // Poll for completion
+      // Poll for completion and spectrum results
       const pollProcessing = setInterval(async () => {
         try {
-          const statusResponse = await fetch('http://localhost:3001/rtl/status');
+          const statusResponse = await fetch('http://localhost:3001/gnss/status');
           if (statusResponse.ok) {
             const status = await statusResponse.json();
+
+            // Check for spectrum analysis results
+            if (recordingFile && !spectrumAnalysis) {
+              const spectrumJsonUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum_analysis.json')}`;
+              fetch(spectrumJsonUrl)
+                .then(res => res.ok ? res.json() : null)
+                .then(data => {
+                  if (data) {
+                    console.log('Spectrum analysis loaded:', data);
+                    setSpectrumAnalysis(data);
+                    setWaitingForSpectrum(false);
+
+                    // Load spectrum image
+                    const imageUrl = `http://localhost:3001/gnss/recordings/${recordingFile.replace('.dat', '_spectrum.png')}?t=${Date.now()}`;
+                    setSpectrumImageUrl(imageUrl);
+                    console.log('Spectrum image URL set:', imageUrl);
+
+                    // Clear processing indicators since spectrum is complete
+                    setIsProcessing(false);
+                    setProgressPhase('');
+                    setProgressMessage('✅ Processing complete!');
+                  }
+                })
+                .catch(err => console.log('Spectrum not ready yet:', err));
+            }
+
             if (status.processing && status.processing.complete) {
               clearInterval(pollProcessing);
               setIsProcessing(false);
@@ -760,7 +796,7 @@ return (
             <Box><strong>Sample Rate:</strong> {recordingConfig.sample_rate_msps || 2.048} MSPS</Box>
             <Box><strong>Format:</strong> 8-bit IQ (RTL-SDR native)</Box>
             <Box><strong>Bandwidth:</strong> ~{recordingConfig.bandwidth_mhz || 2} MHz</Box>
-            <Box><strong>Duration:</strong> 5 minutes (default)</Box>
+            <Box><strong>Duration:</strong> 1 minute (default)</Box>
             <Box><strong>File Size:</strong> ~{recordingConfig.file_size_mb || 1230} MB</Box>
             <Box><strong>Bias-T:</strong> {recordingConfig.bias_tee || 'ENABLED'}</Box>
             <Box><strong>Active Antenna:</strong> Required (powered)</Box>
@@ -772,6 +808,48 @@ return (
         </Box>
       )}
 
+      {/* Recording Duration Configuration */}
+      <Box sx={{ marginBottom: '15px' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+          <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+            Recording Duration:
+          </Typography>
+          <TextField
+            type="number"
+            value={recordingDuration}
+            onChange={(e) => setRecordingDuration(Math.max(5, Math.min(600, parseInt(e.target.value) || 60)))}
+            disabled={isRecording || isProcessing}
+            size="small"
+            sx={{ width: '100px' }}
+            inputProps={{ min: 5, max: 600, step: 5 }}
+          />
+          <Typography variant="body2" color="text.secondary">
+            seconds (~{Math.round(recordingDuration * 15.6)} MB)
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <Typography variant="caption" color="text.secondary" sx={{ lineHeight: '32px' }}>
+            Quick select:
+          </Typography>
+          {[30, 60, 120, 300].map((duration) => (
+            <Button
+              key={duration}
+              size="small"
+              variant="outlined"
+              onClick={() => setRecordingDuration(duration)}
+              disabled={isRecording || isProcessing}
+              sx={{
+                textTransform: 'none',
+                minWidth: '60px',
+                backgroundColor: recordingDuration === duration ? 'rgba(156, 39, 176, 0.1)' : 'transparent'
+              }}
+            >
+              {duration < 60 ? `${duration}s` : `${duration / 60}m`}
+            </Button>
+          ))}
+        </Box>
+      </Box>
+
       {/* Recording Controls */}
       <ButtonGroup variant="contained" sx={{ marginBottom: '10px' }}>
         <Button
@@ -780,7 +858,7 @@ return (
           color="error"
           sx={{ textTransform: 'none' }}
         >
-          ⏺ Start Recording (5 min)
+          ⏺ Start Recording ({recordingDuration < 60 ? `${recordingDuration}s` : `${Math.floor(recordingDuration / 60)}m ${recordingDuration % 60}s`})
         </Button>
         <Button
           onClick={stopRecording}
@@ -855,6 +933,116 @@ return (
           <Typography variant="caption" color="text.secondary" display="block" sx={{ marginTop: '5px' }}>
             Horizontal lines = Jamming bursts | Vertical lines = GPS satellites (Doppler-shifted)
           </Typography>
+        </Box>
+      )}
+
+      {/* Spectrum Analysis Results */}
+      {spectrumAnalysis && (
+        <Box sx={{ marginTop: '15px', padding: '15px', backgroundColor: 'rgba(156, 39, 176, 0.05)', borderRadius: '4px', border: '1px solid rgba(156, 39, 176, 0.3)' }}>
+          <Typography variant="subtitle2" sx={{ marginBottom: '10px', fontWeight: 'bold' }}>
+            📊 Spectrum Analysis - Jamming Detection
+          </Typography>
+
+          {/* Detection Summary */}
+          <Box sx={{ marginBottom: '15px', padding: '10px', backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: '4px' }}>
+            {spectrumAnalysis.summary?.jamming_detected ? (
+              <Typography variant="body2" sx={{ color: 'error.main', fontWeight: 'bold' }}>
+                ⚠️ JAMMING DETECTED: {spectrumAnalysis.summary.primary_threat.toUpperCase()}
+                <br />
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                  Confidence: {(spectrumAnalysis.summary.max_confidence * 100).toFixed(1)}%
+                </Typography>
+              </Typography>
+            ) : (
+              <Typography variant="body2" sx={{ color: 'success.main' }}>
+                ✓ No jamming detected (clean signal)
+              </Typography>
+            )}
+          </Box>
+
+          {/* Detection Details */}
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '15px' }}>
+            {/* Sweep Jammer */}
+            <Box sx={{ padding: '10px', backgroundColor: spectrumAnalysis.detections?.sweep?.detected ? 'rgba(244, 67, 54, 0.1)' : 'rgba(0,0,0,0.02)', borderRadius: '4px' }}>
+              <Typography variant="caption" sx={{ fontWeight: 'bold', display: 'block' }}>
+                {spectrumAnalysis.detections?.sweep?.detected ? '⚠️ ' : '✓ '}
+                Sweep Jammer
+              </Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                {spectrumAnalysis.detections?.sweep?.detected
+                  ? Math.abs(spectrumAnalysis.detections.sweep.sweep_rate_hz_per_sec) > 1000
+                    ? `Sweep rate: ${(spectrumAnalysis.detections.sweep.sweep_rate_hz_per_sec / 1e6).toFixed(2)} MHz/s`
+                    : `Sweep rate: ${(spectrumAnalysis.detections.sweep.sweep_rate_hz_per_sec).toFixed(0)} Hz/s`
+                  : 'Not detected'
+                }
+              </Typography>
+            </Box>
+
+            {/* Pulse Jammer */}
+            <Box sx={{ padding: '10px', backgroundColor: spectrumAnalysis.detections?.pulse?.detected ? 'rgba(244, 67, 54, 0.1)' : 'rgba(0,0,0,0.02)', borderRadius: '4px' }}>
+              <Typography variant="caption" sx={{ fontWeight: 'bold', display: 'block' }}>
+                {spectrumAnalysis.detections?.pulse?.detected ? '⚠️ ' : '✓ '}
+                Pulse Jammer
+              </Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                {spectrumAnalysis.detections?.pulse?.detected
+                  ? `Rate: ${spectrumAnalysis.detections.pulse.pulse_rate_hz.toFixed(1)} Hz, Duty: ${(spectrumAnalysis.detections.pulse.duty_cycle * 100).toFixed(1)}%`
+                  : 'Not detected'
+                }
+              </Typography>
+            </Box>
+
+            {/* Broadband Noise */}
+            <Box sx={{ padding: '10px', backgroundColor: spectrumAnalysis.detections?.noise?.detected ? 'rgba(244, 67, 54, 0.1)' : 'rgba(0,0,0,0.02)', borderRadius: '4px' }}>
+              <Typography variant="caption" sx={{ fontWeight: 'bold', display: 'block' }}>
+                {spectrumAnalysis.detections?.noise?.detected ? '⚠️ ' : '✓ '}
+                Broadband Noise
+              </Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                {spectrumAnalysis.detections?.noise?.detected
+                  ? `Floor: ${spectrumAnalysis.detections.noise.noise_floor_db.toFixed(1)} dB, BW: ${(spectrumAnalysis.detections.noise.bandwidth_hz / 1e6).toFixed(2)} MHz`
+                  : 'Not detected'
+                }
+              </Typography>
+            </Box>
+
+            {/* Narrowband CW */}
+            <Box sx={{ padding: '10px', backgroundColor: spectrumAnalysis.detections?.narrowband?.detected ? 'rgba(244, 67, 54, 0.1)' : 'rgba(0,0,0,0.02)', borderRadius: '4px' }}>
+              <Typography variant="caption" sx={{ fontWeight: 'bold', display: 'block' }}>
+                {spectrumAnalysis.detections?.narrowband?.detected ? '⚠️ ' : '✓ '}
+                Narrowband CW
+              </Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                {spectrumAnalysis.detections?.narrowband?.detected
+                  ? `${spectrumAnalysis.detections.narrowband.num_signals} signal(s) detected`
+                  : 'Not detected'
+                }
+              </Typography>
+            </Box>
+
+            {/* Meaconing */}
+            <Box sx={{ padding: '10px', backgroundColor: spectrumAnalysis.detections?.meaconing?.detected ? 'rgba(244, 67, 54, 0.1)' : 'rgba(0,0,0,0.02)', borderRadius: '4px' }}>
+              <Typography variant="caption" sx={{ fontWeight: 'bold', display: 'block' }}>
+                {spectrumAnalysis.detections?.meaconing?.detected ? '⚠️ ' : '✓ '}
+                Meaconing/Spoofing
+              </Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                {spectrumAnalysis.detections?.meaconing?.detected
+                  ? `${spectrumAnalysis.detections.meaconing.num_signals} suspicious signal(s)`
+                  : 'Not detected'
+                }
+              </Typography>
+            </Box>
+          </Box>
+
+          {/* Location Info */}
+          {spectrumAnalysis.analysis?.location && (
+            <Box sx={{ padding: '10px', backgroundColor: 'rgba(0,0,0,0.02)', borderRadius: '4px' }}>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                <strong>Recording Location:</strong> {spectrumAnalysis.analysis.location}
+              </Typography>
+            </Box>
+          )}
         </Box>
       )}
 
