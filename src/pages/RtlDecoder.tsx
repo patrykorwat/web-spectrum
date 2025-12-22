@@ -241,7 +241,39 @@ function RtlDecoder() {
         body: JSON.stringify({ filename: recordingFile })
       });
 
-      if (!response.ok) throw new Error('Failed to start processing');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+
+        // Check if another processing is in progress
+        if (errorData.error?.includes('Processing already in progress')) {
+          setProgressMessage('⏳ Waiting for previous processing to complete...');
+
+          // Poll until previous processing completes, then retry
+          const waitForProcessing = setInterval(async () => {
+            try {
+              const statusResponse = await fetch('http://localhost:3001/gnss/status');
+              const status = await statusResponse.json();
+
+              // Check if processing finished
+              if (!status.processing.active || status.processing.error) {
+                clearInterval(waitForProcessing);
+
+                // Wait 2 seconds for cleanup, then retry
+                setTimeout(() => {
+                  console.log('Previous processing finished, retrying...');
+                  processRecording();
+                }, 2000);
+              }
+            } catch (err) {
+              console.error('Status check error:', err);
+            }
+          }, 5000);
+
+          return; // Exit without throwing error
+        }
+
+        throw new Error(errorData.error || 'Failed to start processing');
+      }
 
       setProgressMessage('GNSS-SDR processing in progress (this may take 5-10 minutes)...');
 
@@ -298,7 +330,13 @@ function RtlDecoder() {
     } catch (error) {
       console.error('Processing error:', error);
       setIsProcessing(false);
-      setProgressMessage(`Error: ${error}`);
+      setProgressPhase('');
+      setProgressMessage('');
+      setWaitingForSpectrum(false);
+
+      // Show detailed error message with retry instructions
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      alert(`❌ Failed to start GNSS-SDR processing!\n\nError: ${errorMsg}\n\nFile: ${recordingFile}\n\nPlease try clicking "🔄 Process & Get Position" again to retry.`);
     }
   };
 
