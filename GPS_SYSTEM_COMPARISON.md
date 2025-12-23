@@ -373,12 +373,11 @@ python3 gps_spectrum_analyzer.py recordings/gps_recording_*.dat
 ### SDRplay ($200-300)
 
 ```bash
-cd sdrplay-gps/
-
-# Start backend (separate terminal)
+# Start backend (from root directory)
 ./start_backend.sh
 
 # Or manual recording:
+cd sdrplay-gps/
 python3 sdrplay_direct.py --duration 300
 python3 gps_spectrum_analyzer.py recordings/gps_recording_*.dat
 ```

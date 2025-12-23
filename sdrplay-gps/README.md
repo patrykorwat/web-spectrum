@@ -1,11 +1,11 @@
 # SDRplay GPS Backend Services
 
-Clean, production-ready backend for GPS recording and position fixing using SDRplay RSP2.
+Clean, production-ready backend for GPS recording and position fixing using SDRplay RSP2 and RTL-SDR devices.
 
 ## 🚀 Quick Start
 
 ```bash
-cd /Users/patrykorwat/git/web-spectrum/sdrplay-gps
+cd /Users/patrykorwat/git/web-spectrum
 ./start_backend.sh
 ```
 
@@ -25,7 +25,7 @@ This starts:
 ## 📁 Files
 
 ### Core Backend Scripts
-- `start_backend.sh` - Main startup script
+- `../start_backend.sh` - Main startup script (in root directory)
 - `recording_api_simple.py` - HTTP API server (port 5001)
 - `gnss_sdr_bridge.py` - WebSocket server (port 8766)
 - `sdrplay_direct.py` - SDRplay RSP2 device interface
@@ -68,18 +68,19 @@ This starts:
 ## 📊 Directory Structure
 
 ```
-sdrplay-gps/
-├── start_backend.sh           # Main startup script
-├── recording_api_simple.py    # HTTP API
-├── gnss_sdr_bridge.py         # WebSocket server
-├── sdrplay_direct.py          # SDRplay interface
-├── detect_sdrplay.py          # Device detection
-├── gnss_sdr_file.conf         # GNSS config
-├── recordings/                # GPS recordings stored here
-├── logs/                      # Service logs
-│   ├── http_api.log
-│   └── websocket.log
-└── .pids/                     # Process IDs (auto-created)
+web-spectrum/
+├── start_backend.sh           # Main startup script (moved to root)
+└── sdrplay-gps/
+    ├── recording_api_simple.py    # HTTP API
+    ├── gnss_sdr_bridge.py         # WebSocket server
+    ├── sdrplay_direct.py          # SDRplay interface
+    ├── detect_sdrplay.py          # Device detection
+    ├── gnss_sdr_file.conf         # GNSS config
+    ├── recordings/                # GPS recordings stored here
+    ├── logs/                      # Service logs
+    │   ├── http_api.log
+    │   └── websocket.log
+    └── .pids/                     # Process IDs (in root)
 ```
 
 ## ✅ Key Features & Fixes Applied
@@ -101,8 +102,8 @@ sdrplay-gps/
 
 ## 🎯 Workflow
 
-1. **Start backend**: `./start_backend.sh`
-2. **Start frontend**: `cd .. && npm start`
+1. **Start backend**: `./start_backend.sh` (from root directory)
+2. **Start frontend**: `npm start`
 3. **Open browser**: http://localhost:3000
 4. **Record**: Click "Start Recording" (5 minutes)
 5. **Process**: Auto-starts after recording

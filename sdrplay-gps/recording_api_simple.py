@@ -515,6 +515,12 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
                     return
 
                 filepath = os.path.join(RECORDINGS_DIR, filename)
+
+                # Wait briefly for file to be fully written if it was just created
+                if not os.path.exists(filepath):
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] File not found immediately, waiting 2s...")
+                    time.sleep(2)
+
                 if not os.path.exists(filepath):
                     self._set_headers(404)
                     self.wfile.write(json.dumps({
@@ -522,6 +528,18 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
                         'error': f'Recording file not found: {filename}'
                     }).encode())
                     return
+
+                # Verify file has reasonable size (at least 1MB)
+                file_size = os.path.getsize(filepath)
+                if file_size < 1_000_000:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({
+                        'success': False,
+                        'error': f'Recording file too small ({file_size} bytes). Recording may have failed.'
+                    }).encode())
+                    return
+
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Processing file: {filepath} ({file_size / 1e9:.2f} GB)")
 
                 if processing_process and processing_process.poll() is None:
                     self._set_headers(400)

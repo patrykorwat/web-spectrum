@@ -108,7 +108,7 @@ PVT.enable_monitor=true             # UDP monitoring on port 1234
 
 ### Scripts
 - `/sdrplay-gps/sdrplay_direct.py` - Recording script
-- `/sdrplay-gps/start_backend.sh` - Start HTTP API + WebSocket servers
+- `/start_backend.sh` - Start HTTP API + WebSocket servers (in root directory)
 
 ### Output Files
 - `/sdrplay-gps/recordings/*.dat` - IQ recordings

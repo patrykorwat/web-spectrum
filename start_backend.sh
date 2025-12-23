@@ -2,7 +2,10 @@
 ################################################################################
 # GPS Backend Services Startup Script
 #
-# Starts all necessary backend services for GPS recording and processing:
+# Starts all necessary backend services for GPS recording and processing
+# Supports both SDRPlay and RTL-SDR devices
+#
+# Services:
 # 1. HTTP API Server (port 5001) - handles recording commands
 # 2. WebSocket Server (port 8766) - streams GNSS data to UI
 #
@@ -14,6 +17,7 @@
 ################################################################################
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SDRPLAY_DIR="$SCRIPT_DIR/sdrplay-gps"
 PIDFILE_DIR="$SCRIPT_DIR/.pids"
 HTTP_PIDFILE="$PIDFILE_DIR/http_api.pid"
 WS_PIDFILE="$PIDFILE_DIR/websocket.pid"
@@ -58,8 +62,8 @@ start_http_api() {
     fi
 
     print_status "$BLUE" "Starting HTTP API Server (port 5001)..."
-    cd "$SCRIPT_DIR"
-    nohup python3 recording_api_simple.py > "$SCRIPT_DIR/logs/http_api.log" 2>&1 &
+    cd "$SDRPLAY_DIR"
+    nohup python3 recording_api_simple.py > "$SDRPLAY_DIR/logs/http_api.log" 2>&1 &
     echo $! > "$HTTP_PIDFILE"
     sleep 2
 
@@ -79,8 +83,8 @@ start_websocket() {
     fi
 
     print_status "$BLUE" "Starting WebSocket Server (port 8766)..."
-    cd "$SCRIPT_DIR"
-    nohup python3 gnss_sdr_bridge.py > "$SCRIPT_DIR/logs/websocket.log" 2>&1 &
+    cd "$SDRPLAY_DIR"
+    nohup python3 gnss_sdr_bridge.py > "$SDRPLAY_DIR/logs/websocket.log" 2>&1 &
     echo $! > "$WS_PIDFILE"
     sleep 2
 
@@ -154,7 +158,7 @@ start_all() {
     echo ""
 
     # Ensure log directory exists
-    mkdir -p "$SCRIPT_DIR/logs"
+    mkdir -p "$SDRPLAY_DIR/logs"
 
     # Start services
     start_http_api
@@ -171,7 +175,7 @@ start_all() {
     print_status "$BLUE" "HTTP API:    http://localhost:5001"
     print_status "$BLUE" "WebSocket:   ws://localhost:8766"
     echo ""
-    print_status "$YELLOW" "Logs location: $SCRIPT_DIR/logs/"
+    print_status "$YELLOW" "Logs location: $SDRPLAY_DIR/logs/"
     print_status "$YELLOW" "To stop: ./start_backend.sh stop"
     echo ""
 }
