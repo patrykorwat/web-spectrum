@@ -380,25 +380,11 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
         if self.path == '/gnss/start-recording':
             # Start recording
             try:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Received recording request: {data}")
                 duration = data.get('duration', RECORDING_CONFIG['duration_default'])
                 # Allow tuner selection from request, fallback to config default
                 tuner = data.get('tuner', RECORDING_CONFIG['tuner'])
                 # NEW: Explicit device type selection from request
                 device_type = data.get('device_type', 'sdrplay')  # Default to sdrplay for backward compatibility
-                # NEW: Decoder selection affects sample rate
-                decoder = data.get('decoder', 'gnss-sdr')  # Default to GNSS-SDR
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Extracted decoder: '{decoder}', device_type: '{device_type}')")
-
-                # Adjust sample rate based on decoder
-                # Gypsum requires exactly 2.046 MHz (2x PRN rate)
-                # GNSS-SDR works with any sample rate
-                if decoder == 'gypsum':
-                    sample_rate = 2046000  # Exactly 2.046 MHz for Gypsum
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Using 2.046 MHz sample rate for Gypsum decoder")
-                else:
-                    sample_rate = RECORDING_CONFIG['sample_rate']  # Default 2.048 MHz for GNSS-SDR
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Using {sample_rate/1e6:.3f} MHz sample rate for GNSS-SDR decoder")
 
                 if recording_process and recording_process.poll() is None:
                     self._set_headers(400)
@@ -440,7 +426,7 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
                         'python3', '-u', record_script,
                         '--output', filepath,
                         '--duration', str(duration),
-                        '--sample-rate', str(sample_rate),  # Use decoder-specific sample rate
+                        '--sample-rate', str(RECORDING_CONFIG['sample_rate']),
                         '--frequency', str(RECORDING_CONFIG['frequency']),
                         '--gain-reduction', str(RECORDING_CONFIG['gain_reduction']),
                         '--tuner', str(tuner)  # Use selected tuner from request
@@ -583,26 +569,15 @@ class RecordingAPIHandler(BaseHTTPRequestHandler):
                     # Use Gypsum decoder (Python-based GPS receiver)
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting Gypsum decoder...")
 
-                    # Check if gypsum_simple_wrapper.py exists
-                    gypsum_wrapper = os.path.join(os.path.dirname(SCRIPT_DIR), 'rtl-sdr-gps', 'gypsum_simple_wrapper.py')
+                    # Check if gypsum_wrapper.py exists
+                    gypsum_wrapper = os.path.join(os.path.dirname(SCRIPT_DIR), 'rtl-sdr-gps', 'gypsum_wrapper.py')
                     if not os.path.exists(gypsum_wrapper):
                         raise Exception(f'Gypsum wrapper not found at: {gypsum_wrapper}')
 
                     output_basename = os.path.join(RECORDINGS_DIR, filename.replace('.dat', ''))
 
-                    # Detect sample rate from file size
-                    # File format: complex64 (8 bytes per sample)
-                    file_size = os.path.getsize(filepath)
-                    num_samples = file_size / 8
-                    # Estimate duration from filename timestamp or use reasonable guess
-                    # For now, check if file size matches 2.046 MHz or 2.048 MHz patterns
-                    # We'll default to 2.046 MHz (Gypsum's expected rate)
-                    sample_rate = 2046000  # Default for Gypsum
-
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Using sample rate {sample_rate/1e6:.3f} MHz for Gypsum")
-
-                    # Run Gypsum wrapper with sample rate
-                    cmd = f"python3 {gypsum_wrapper} --input {filepath} --output {RECORDINGS_DIR} --sample-rate {sample_rate}"
+                    # Run Gypsum wrapper
+                    cmd = f"python3 {gypsum_wrapper} --input {filepath} --output {RECORDINGS_DIR}"
 
                     env = os.environ.copy()
                     env['PYTHONUNBUFFERED'] = '1'

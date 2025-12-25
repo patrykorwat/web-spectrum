@@ -1,11 +1,90 @@
-# SDRPlay Bridge Requirements
-# Install with: pip install -r requirements.txt
+# Web-Spectrum GPS System - Python Requirements
+# ==================================================
+# Install with: pip3 install -r requirements.txt
+#
+# This file includes dependencies for:
+# - SDRPlay GPS Bridge
+# - RTL-SDR GPS Processing
+# - GNSS-SDR Backend API
+# - Gypsum GPS Decoder (Python-based)
+#
+# Installation:
+#   pip3 install -r requirements.txt
+#
+# OR for macOS with Homebrew Python:
+#   pip3 install --break-system-packages -r requirements.txt
+#
+# OR using virtual environment (recommended):
+#   python3 -m venv venv
+#   source venv/bin/activate
+#   pip install -r requirements.txt
+# ==================================================
 
-# NOTE: SoapySDR Python bindings are installed via Homebrew (brew install soapysdr)
-# They are NOT available via pip
+# Core Dependencies
+# -----------------
+numpy>=1.24.0              # Signal processing, FFT, correlation
 
-# WebSocket server
-websockets>=12.0
+# WebSocket Communication
+# -----------------------
+websockets>=12.0           # WebSocket server for real-time data streaming
 
-# Numpy for sample processing
-numpy>=1.24.0
+# HTTP Requests (for Gypsum)
+# ---------------------------
+requests>=2.31.0           # HTTP client for Gypsum web dashboard
+certifi>=2023.11.17        # SSL certificates
+charset-normalizer>=3.3.0  # Character encoding detection
+idna>=3.6                  # Internationalized domain names
+urllib3>=2.1.0             # HTTP library
+
+# Date/Time Handling (for Gypsum)
+# --------------------------------
+python-dateutil>=2.8.2     # Date parsing and manipulation
+six>=1.16.0                # Python 2/3 compatibility
+
+# Gypsum Web Dashboard (Required for Gypsum decoder)
+# ---------------------------------------------------
+falcon>=3.1.0              # Web framework
+pydantic>=2.5.0            # Data validation
+jinja2>=3.1.0              # Template engine
+markupsafe>=2.1.0          # Safe string handling
+
+# Visualization (Optional - for Gypsum matplotlib tracker)
+# ---------------------------------------------------------
+# Uncomment if you want Gypsum's matplotlib satellite tracker
+# matplotlib>=3.8.0
+# contourpy>=1.2.0
+# cycler>=0.12.1
+# fonttools>=4.44.1
+# kiwisolver>=1.4.5
+# packaging>=23.2
+# pillow>=10.1.0
+# pyparsing>=3.1.1
+
+# Task Automation (Optional - for Gypsum development)
+# ----------------------------------------------------
+# invoke>=2.2.0
+
+# Hardware Interface (System-level - NOT from pip)
+# -------------------------------------------------
+# NOTE: The following are installed via system package managers:
+#
+# macOS (Homebrew):
+#   brew install soapysdr       # SoapySDR framework
+#   brew install librtlsdr      # RTL-SDR drivers
+#   brew install gnss-sdr       # GNSS-SDR (optional, for professional mode)
+#
+# Linux (Ubuntu/Debian):
+#   sudo apt-get install python3-soapysdr
+#   sudo apt-get install rtl-sdr
+#   sudo apt-get install gnss-sdr
+#
+# The Python bindings for SoapySDR are NOT available via pip.
+# They are installed automatically with the system packages above.
+
+# Development Dependencies (Optional)
+# ------------------------------------
+# Uncomment for development work:
+# pytest>=7.0.0              # Testing framework
+# black>=23.0.0              # Code formatting
+# flake8>=6.0.0              # Linting
+# mypy>=1.0.0                # Type checking

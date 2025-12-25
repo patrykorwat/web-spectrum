@@ -72,17 +72,36 @@ def record_rtlsdr(output_file, duration=300, sample_rate=2048000, frequency=1575
             bufsize=1
         )
 
-        # Print output in real-time
+        # Print output in real-time with timeout protection
+        # rtl_sdr -n parameter doesn't always work reliably, so we enforce timeout
+        timeout_seconds = duration + 10  # Add 10 second buffer
         samples_written = 0
-        for line in iter(process.stdout.readline, ''):
+
+        while True:
+            elapsed = time.time() - start_time
+
+            # Force kill if exceeded timeout
+            if elapsed > timeout_seconds:
+                print(f"\n⚠️  Recording timeout ({timeout_seconds}s) - terminating rtl_sdr process")
+                process.terminate()
+                time.sleep(1)
+                if process.poll() is None:
+                    process.kill()
+                break
+
+            # Check if process finished
+            if process.poll() is not None:
+                break
+
+            # Read output line
+            line = process.stdout.readline()
             if line:
                 print(line.rstrip())
-                # Try to extract progress if available
-                if 'samples' in line.lower():
-                    sys.stdout.flush()
+                sys.stdout.flush()
+            else:
+                time.sleep(0.1)
 
-        # Wait for completion
-        return_code = process.wait()
+        return_code = process.poll() if process.poll() is not None else 0
         elapsed = time.time() - start_time
 
         if return_code != 0:

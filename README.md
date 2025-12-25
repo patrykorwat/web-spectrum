@@ -69,13 +69,30 @@ ls /Library/SDRplayAPI/
 ```
 
 ### Python Dependencies
-```bash
-# Install Python packages for SDRPlay recording
-pip3 install numpy websockets
 
-# Optional: For protobuf PVT message parsing
-pip3 install protobuf
+Install all required Python packages using the comprehensive requirements file:
+
+```bash
+# Option 1: Standard installation (recommended)
+pip3 install -r requirements.txt
+
+# Option 2: macOS with Homebrew Python
+pip3 install --break-system-packages -r requirements.txt
+
+# Option 3: Using virtual environment (cleanest)
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
 ```
+
+**What's included:**
+- `numpy` - Signal processing, FFT, correlation
+- `websockets` - WebSocket server for real-time data streaming
+- `requests` - HTTP client for Gypsum GPS decoder
+- `python-dateutil` - Date parsing for GPS timestamps
+- Other supporting libraries for GPS decoders
+
+See [requirements.txt](requirements.txt) for the complete list with version constraints.
 
 ## Quick Start
 
@@ -90,22 +107,42 @@ npm start
 The recording backend now supports **both RTL-SDR and SDRPlay** automatically:
 
 ```bash
+# Easy way: Use the startup script (from root directory)
+./start_backend.sh
+# This starts both HTTP API (port 5001) and WebSocket (port 8766)
+
+# OR manually (from sdrplay-gps directory):
 # Terminal 1: Start unified recording API server
 cd sdrplay-gps
 python3 recording_api_simple.py
 # Listens on http://localhost:3001
-# Auto-detects and supports both RTL-SDR and SDRPlay devices
 
 # Terminal 2: Start GNSS-SDR bridge (for live position tracking)
 python3 gnss_sdr_bridge.py
 # Listens on ws://localhost:8766
 ```
 
-The backend automatically:
-- ✅ Detects which SDR device is available (RTL-SDR or SDRplay)
-- ✅ Routes to the correct recording script (`rtlsdr_direct.py` or `sdrplay_direct.py`)
-- ✅ Converts RTL-SDR uint8 format to complex64 for GNSS-SDR compatibility
-- ✅ Processes recordings with GNSS-SDR and generates spectrum analysis
+**Backend Features:**
+- ✅ **Auto-detection** - Detects which SDR device is available (RTL-SDR or SDRplay)
+- ✅ **Dual decoder support** - Choose between GNSS-SDR (professional) or Gypsum (Python-based)
+- ✅ **Format conversion** - Converts RTL-SDR uint8 to complex64 for GNSS-SDR
+- ✅ **Automatic processing** - Generates spectrum analysis and jamming detection
+- ✅ **WebSocket streaming** - Real-time processing logs to web UI
+
+**Available GPS Decoders:**
+1. **GNSS-SDR** (Default) - Professional C++ implementation
+   - Accurate position fixes
+   - Full NMEA/KML/GPX output
+   - Multi-constellation support
+   - Processing time: 5-10 minutes
+
+2. **Gypsum** - Python-based GPS receiver
+   - Educational and research-oriented
+   - Faster processing (1-2 minutes)
+   - Minimal dependencies
+   - Good for learning GPS signal processing
+
+Select decoder in the web UI under "GPS Decoder" dropdown.
 
 ### Using the GPS Recording Feature
 

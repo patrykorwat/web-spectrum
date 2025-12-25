@@ -109,6 +109,9 @@ function RtlDecoder() {
   // Jamming status
   const [jammingStatus, setJammingStatus] = useState<any>(null);
 
+  // Decoder selection (GNSS-SDR vs Gypsum)
+  const [selectedDecoder, setSelectedDecoder] = useState<'gnss-sdr' | 'gypsum'>('gnss-sdr');
+
   const pointsBatch = 10000;
 
   const xPoints: Array<number> = [];
@@ -175,7 +178,8 @@ function RtlDecoder() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           duration: recordingDuration,  // Use configured duration
-          device_type: 'rtlsdr'  // Explicitly use RTL-SDR device
+          device_type: 'rtlsdr',  // Explicitly use RTL-SDR device
+          decoder: selectedDecoder  // Pass decoder selection for sample rate adjustment
         })
       });
 
@@ -232,13 +236,17 @@ function RtlDecoder() {
       setIsProcessing(true);
       setProgressPhase('processing');
       setProgressPercent(0);
-      setProgressMessage('Processing GPS data with GNSS-SDR...');
+      const decoderName = selectedDecoder === 'gnss-sdr' ? 'GNSS-SDR' : 'Gypsum';
+      setProgressMessage(`Processing GPS data with ${decoderName}...`);
       setWaitingForSpectrum(true);  // Show waiting for spectrum message
 
       const response = await fetch('http://localhost:3001/gnss/process-recording', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: recordingFile })
+        body: JSON.stringify({
+          filename: recordingFile,
+          decoder: selectedDecoder  // Pass decoder selection to backend
+        })
       });
 
       if (!response.ok) {
@@ -275,7 +283,7 @@ function RtlDecoder() {
         throw new Error(errorData.error || 'Failed to start processing');
       }
 
-      setProgressMessage('GNSS-SDR processing in progress (this may take 5-10 minutes)...');
+      setProgressMessage(`${decoderName} processing in progress (${selectedDecoder === 'gypsum' ? '1-2 minutes' : '5-10 minutes'})...`);
 
       // Poll for completion and spectrum results
       const pollProcessing = setInterval(async () => {
@@ -886,6 +894,47 @@ return (
             </Button>
           ))}
         </Box>
+      </Box>
+
+      {/* Decoder Selection */}
+      <Box sx={{ marginBottom: '15px' }}>
+        <Typography variant="body2" sx={{ fontWeight: 'bold', marginBottom: '8px' }}>
+          GPS Decoder:
+        </Typography>
+        <MuiFormControl fullWidth size="small">
+          <Select
+            value={selectedDecoder}
+            onChange={(event) => setSelectedDecoder(event.target.value as 'gnss-sdr' | 'gypsum')}
+            disabled={isRecording || isProcessing}
+          >
+            <MenuItem value="gnss-sdr">
+              <Box>
+                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                  GNSS-SDR (Professional)
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  C++ implementation, high accuracy, full NMEA/KML/GPX output
+                </Typography>
+              </Box>
+            </MenuItem>
+            <MenuItem value="gypsum">
+              <Box>
+                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                  Gypsum (Python-based)
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Faster processing, educational, minimal dependencies
+                </Typography>
+              </Box>
+            </MenuItem>
+          </Select>
+        </MuiFormControl>
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ marginTop: '5px' }}>
+          {selectedDecoder === 'gnss-sdr'
+            ? '✅ Best for: Production use, research, accurate position fixes'
+            : '🚀 Best for: Quick tests, learning GPS signal processing, lighter system load'
+          }
+        </Typography>
       </Box>
 
       {/* Recording Controls */}
