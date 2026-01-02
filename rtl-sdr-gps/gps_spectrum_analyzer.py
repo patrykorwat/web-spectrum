@@ -252,8 +252,8 @@ class GPSSpectrumAnalyzer:
         # Calculate instantaneous power
         power = np.abs(samples) ** 2
 
-        # Smooth power envelope
-        window_size = int(self.sample_rate * 0.001)  # 1ms window
+        # Smooth power envelope - use shorter window for better pulse resolution
+        window_size = int(self.sample_rate * 0.0005)  # 0.5ms window (was 1ms)
         power_smooth = np.convolve(power, np.ones(window_size)/window_size, mode='same')
 
         # Detect sharp transitions
@@ -276,9 +276,34 @@ class GPSSpectrumAnalyzer:
             duration = len(samples) / self.sample_rate
             pulse_rate = (num_pulses / 2) / duration
 
-            # Estimate duty cycle
-            high_power = power_smooth > np.median(power_smooth)
+            # IMPROVED DUTY CYCLE CALCULATION:
+            # Use 80th percentile as threshold instead of median (50th)
+            # This prevents artificial 50% duty cycle bias
+            # For real pulse jamming, "on" state should be significantly above noise floor
+            power_threshold = np.percentile(power_smooth, 80)
+
+            # Alternative method: Use dynamic threshold based on power distribution
+            # If there's a clear bimodal distribution (on/off states), use midpoint
+            power_std = np.std(power_smooth)
+            power_mean = np.mean(power_smooth)
+
+            # If power variation is high (pulsed), use adaptive threshold
+            # Otherwise fall back to percentile method
+            if power_std > power_mean * 0.3:  # High variation = clear pulses
+                # Find "on" state: regions significantly above mean
+                power_threshold = power_mean + power_std * 0.5
+
+            high_power = power_smooth > power_threshold
             duty_cycle = np.sum(high_power) / len(high_power)
+
+            # Sanity check: if duty cycle is suspiciously close to 50%,
+            # it's likely threshold error, so recompute with higher threshold
+            if 0.45 <= duty_cycle <= 0.55:
+                # Try 85th percentile for more conservative estimate
+                power_threshold = np.percentile(power_smooth, 85)
+                high_power = power_smooth > power_threshold
+                duty_cycle = np.sum(high_power) / len(high_power)
+                print(f"    (Adjusted duty cycle threshold to 85th percentile)")
 
             confidence = min(num_pulses / 100, 1.0)
 
@@ -287,6 +312,7 @@ class GPSSpectrumAnalyzer:
             print(f"    Pulse rate: {pulse_rate:.1f} Hz")
             print(f"    Duty cycle: {duty_cycle * 100:.1f}%")
             print(f"    Total pulses: {num_pulses}")
+            print(f"    Power threshold used: {10*np.log10(power_threshold+1e-12):.1f} dB")
         else:
             print(f"  ✗ No pulse pattern detected")
 

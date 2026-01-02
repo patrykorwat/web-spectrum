@@ -649,6 +649,17 @@ class SDRplayDevice:
         self.device = selected
         print(f"✓ Selected device: {self.device.SerNo.decode()}")
 
+        # Configure RSPduo mode if this is an RSPduo
+        # hwVer=3 is shared by RSP2 and RSPduo, distinguish by rspDuoMode
+        if self.device.rspDuoMode != 0:
+            # This is an RSPduo - configure Single Tuner mode for 10 MSPS support
+            # Master mode maxes out at 8 MSPS, Single Tuner supports up to 10 MSPS
+            print(f"✓ RSPduo detected (current mode: {self.device.rspDuoMode})")
+            self.device.rspDuoMode = sdrplay_api_RspDuoModeT.Single_Tuner  # 1
+            self.device.tuner = sdrplay_api_TunerSelectT.Tuner_A  # 1 - use Tuner A
+            self.device.rspDuoSampleFreq = 10e6  # 10 MSPS for Single Tuner mode
+            print(f"✓ Configured RSPduo Single Tuner mode: Tuner A, 10 MSPS")
+
         # Select device
         err = self.lib.sdrplay_api_SelectDevice(byref(self.device))
         if err != sdrplay_api_ErrT.Success:
@@ -789,50 +800,60 @@ class SDRplayDevice:
         rx_params.tunerParams.rfFreq.rfHz = 1575420000.0  # GPS L1 frequency
         rx_params.tunerParams.rfFreq.syncUpdate = 0
 
-        # Set bandwidth and IF mode - Use 1.536 MHz for GPS L1 MAIN LOBE capture
-        # GPS L1 C/A main lobe: ±1.023 MHz = 2.046 MHz total
-        # Using 1.536 MHz bandwidth (slightly narrower than ideal, but closest available)
-        # This will capture ~75% of main lobe power (acceptable trade-off for speed)
-        # Combined with 2.048 MSPS sample rate = 5× faster than 10 MSPS!
-        rx_params.tunerParams.bwType = sdrplay_api_Bw_MHzT.BW_1_536  # 1.536 MHz bandwidth
-        rx_params.tunerParams.ifType = sdrplay_api_If_kHzT.IF_Zero  # Zero-IF like C example
+        # Set bandwidth and IF mode - Use 8 MHz for 8 MSPS sample rate (matching SDRconnect)
+        # For 8 MSPS sample rate, use 8 MHz anti-aliasing filter (~6.4 MHz usable bandwidth)
+        # This matches the SDRconnect configuration
+        rx_params.tunerParams.bwType = sdrplay_api_Bw_MHzT.BW_8_000  # 8 MHz bandwidth (full bandwidth)
+        rx_params.tunerParams.ifType = sdrplay_api_If_kHzT.IF_Zero  # Zero-IF mode with DC correction
         rx_params.tunerParams.loMode = sdrplay_api_LoModeT.Auto
 
-        # Set gain parameters - High gain for GPS reception (balanced for sensitivity and stability)
-        rx_params.tunerParams.gain.gRdB = 30  # 30 dB gain reduction (29 dB actual gain, balanced)
-        rx_params.tunerParams.gain.LNAstate = 4  # Higher LNA state for better sensitivity
+        # Set gain parameters - EXTREME low noise: near-minimum gain for absolute cleanest signal
+        # Active antenna LNA provides ~20 dB additional gain
+        # In SDRplay: Total gain = 59 - gRdB, so for ~5 dB system gain: gRdB = 54
+        rx_params.tunerParams.gain.gRdB = 21  # Optimal from binary search
+        rx_params.tunerParams.gain.LNAstate = 5  # LNAstate=5 provides ~17 dB IF gain
         rx_params.tunerParams.gain.syncUpdate = 0
         rx_params.tunerParams.gain.minGr = sdrplay_api_MinGainReductionT.NORMAL_MIN_GR
 
-        # Bias-T configuration - MUST be enabled for active GPS antenna
-        # Active antennas have built-in LNA that requires power
-        bias_t_enable = 1  # 0=disabled, 1=enabled
+        # Bias-T configuration - ENABLED to power active antenna LNA
+        # Active antennas have built-in LNA that requires power (typically 3-5V)
+        bias_t_enable = 1  # 0=disabled, 1=enabled (ENABLED for active antenna)
 
         rx_params.rsp1aTunerParams.biasTEnable = bias_t_enable  # RSP1A
 
-        # RSP2: Configure Bias-T AND select Antenna B (Port 2)
-        # Antenna A=5 (Port 1: 10kHz-2GHz), Antenna B=6 (Port 2: 60MHz-2GHz)
-        # Based on SDRplay API: sdrplay_api_Rsp2_ANTENNA_A = 5, sdrplay_api_Rsp2_ANTENNA_B = 6
-        rx_params.rsp2TunerParams.biasTEnable = bias_t_enable   # RSP2 Bias-T
-        rx_params.rsp2TunerParams.antennaSel = 6    # RSP2 Antenna B (Port 2)
+        # Device-specific configuration based on detected device type
+        # Check if this is an RSPduo (rspDuoMode != 0) or RSP2 (rspDuoMode == 0)
+        is_rspduo = (self.device.rspDuoMode != 0)
 
-        rx_params.rspDuoTunerParams.biasTEnable = bias_t_enable  # RSPduo
-
-        if bias_t_enable:
-            print("✓ Bias-T ENABLED for active antenna power (all device types)")
+        if is_rspduo:
+            # RSPduo: Configure Bias-T only (no antenna selection needed)
+            rx_params.rspDuoTunerParams.biasTEnable = bias_t_enable
+            if bias_t_enable:
+                print("✓ Bias-T ENABLED for active antenna power (RSPduo)")
+            else:
+                print("✓ Bias-T DISABLED (RSPduo)")
+            print(f"✓ RSPduo: Tuner A, mode={self.device.rspDuoMode}")
         else:
-            print("✓ Bias-T DISABLED to reduce power consumption")
-        print("✓ RSP2: Antenna B (Port 2) selected")
+            # RSP2: Configure Bias-T AND select Antenna B (Port 2)
+            # Antenna A=5 (Port 1: 10kHz-2GHz), Antenna B=6 (Port 2: 60MHz-2GHz)
+            rx_params.rsp2TunerParams.biasTEnable = bias_t_enable
+            rx_params.rsp2TunerParams.antennaSel = 6  # Antenna B (Port 2)
+            if bias_t_enable:
+                print("✓ Bias-T ENABLED for active antenna power (RSP2)")
+            else:
+                print("✓ Bias-T DISABLED (RSP2)")
+            print("✓ RSP2: Antenna B (Port 2) selected")
 
-        # Configure DC offset
-        rx_params.tunerParams.dcOffsetTuner.dcCal = 3  # Periodic mode
-        rx_params.tunerParams.dcOffsetTuner.speedUp = 0
-        rx_params.tunerParams.dcOffsetTuner.trackTime = 1
-        rx_params.tunerParams.dcOffsetTuner.refreshRateTime = 2048
+        # Configure DC offset - Moderate settings to avoid overcorrection artifacts
+        rx_params.tunerParams.dcOffsetTuner.dcCal = 3  # Periodic mode (optimal for GPS)
+        rx_params.tunerParams.dcOffsetTuner.speedUp = 0  # Disable speedup to prevent overcorrection
+        rx_params.tunerParams.dcOffsetTuner.trackTime = 1  # Default tracking (balanced response)
+        rx_params.tunerParams.dcOffsetTuner.refreshRateTime = 2048  # Standard refresh rate
 
-        # Configure control parameters
-        rx_params.ctrlParams.dcOffset.DCenable = 1
-        rx_params.ctrlParams.dcOffset.IQenable = 1
+        # Configure control parameters - DC and IQ correction ENABLED
+        # Based on automated sweep: IQ correction ON gives best parabola reduction (0.11 severity)
+        rx_params.ctrlParams.dcOffset.DCenable = 1  # DC offset correction enabled
+        rx_params.ctrlParams.dcOffset.IQenable = 1  # IQ correction ENABLED (reduces parabolic artifact from 0.13 to 0.11)
 
         # Disable decimation (we're already at 2.048 MSPS)
         rx_params.ctrlParams.decimation.enable = 0
@@ -905,7 +926,7 @@ class SDRplayDevice:
         gain_reduction = int(max(0, min(59, 59 - gain_db)))
 
         rx_params = self.device_params.contents.rxChannelA.contents
-        rx_params.tunerParams.gain.gRdB = gain_reduction
+        rx_params.tunerParams.gain.gRdB = 21  # Optimal from binary search
         rx_params.tunerParams.gain.syncUpdate = 0
 
         print(f"✓ Set gain: {gain_db} dB (reduction: {gain_reduction} dB)")

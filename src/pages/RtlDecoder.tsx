@@ -379,7 +379,7 @@ return (
           <FormControlLabel
             value="gnss-sdr"
             control={<MuiRadio />}
-            label="Professional Mode (GNSS-SDR)"
+            label="Third party analysis"
             disabled={websocketReceiver?.isConnected() || radio?.isPlaying()}
           />
         </RadioGroup>
