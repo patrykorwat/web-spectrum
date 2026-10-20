@@ -14,10 +14,10 @@
 
 /** State machine to orchestrate the RTL2832, demodulation, and audio playing. */
 
-import { U8ToFloat32 } from "../dsp/converters.ts";
-import { RadioError, RadioErrorType } from "./errors.ts";
-import { DirectSampling, RtlDevice, RtlDeviceProvider } from "./rtlsdr/rtldevice.ts";
-import { Channel } from "./msgqueue.ts";
+import { U8ToFloat32 } from "../dsp/converters";
+import { RadioError, RadioErrorType } from "./errors";
+import { DirectSampling, RtlDevice, RtlDeviceProvider } from "./rtlsdr/rtldevice";
+import { Channel } from "./msgqueue";
 import { SampleReceiver } from "./sample_receiver";
 
 /** A message sent to the state machine. */
@@ -77,7 +77,7 @@ export class Radio extends EventTarget {
   /** RF gain in dB, or null for automatic. */
   private gain: number | null;
   /** Currently tuned frequency. */
-  private frequency: number;
+  private frequency!: number;
   /** Whether direct sampling mode is enabled. */
   private directSamplingMethod: DirectSampling;
   /** Whether the bias tee is enabled. */
@@ -301,7 +301,7 @@ class Transfers {
   private samplesPerBuf: number;
   private buffersWanted: number;
   private buffersRunning: number;
-  private iqConverter: U8ToFloat32;
+  private iqConverter!: U8ToFloat32;
   private directSampling: boolean;
   private stopCallback: () => void;
 

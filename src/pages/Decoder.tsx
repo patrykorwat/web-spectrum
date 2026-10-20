@@ -31,8 +31,8 @@ import Select from '@mui/material/Select';
 
 import Stack from '@mui/system/Stack';
 
-import Label from '../components/Label.tsx';
-import NumberInput from '../components/NumberInput.tsx';
+import Label from '../components/Label';
+import NumberInput from '../components/NumberInput';
 
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
@@ -42,9 +42,9 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Paper from '@mui/material/Paper';
 
-import { Demodulator as IsmDemodulator } from '../protocol/ism/demodulator.ts'
-import { Protocol } from '../protocol/protocol.ts'
-import { sleep } from '../utils/io.ts';
+import { Demodulator as IsmDemodulator } from '../protocol/ism/demodulator'
+import { Protocol } from '../protocol/protocol'
+import { sleep } from '../utils/io';
 
 const tinySAUltra = { usbVendorId: 0x0483, usbProductId: 0x5740 }
 
@@ -94,16 +94,16 @@ function Decoder() {
   const [sweeptimeUnit, setSweeptimeUnit] = useState("m");
   const [triggerLevel, setTriggerLevel] = useState(-70);
 
-  const [powerLevels, setPowerLevels] = useState([]);
-  const [xPoints, setXPoints] = useState([]);
+  const [powerLevels, setPowerLevels] = useState<number[]>([]);
+  const [xPoints, setXPoints] = useState<number[]>([]);
 
-  const [decodedItems, setDecodedItems] = useState([]);
+  const [decodedItems, setDecodedItems] = useState<any[]>([]);
 
   const filters = [tinySAUltra];
   const ismDemodulator = new IsmDemodulator();
 
   const readData = async () => {
-    let responseBuffer = [];
+    let responseBuffer: Uint8Array = new Uint8Array([]);
     while (port && port.readable) {
       try {
         reader = port.readable.getReader();
@@ -242,7 +242,7 @@ return (
         console.log("connected")
         console.log(port)
 
-        setTriggerAndDecode(port);
+        setTriggerAndDecode();
       }}>Trigger&Decode</Button>
       <Button disabled={portState === undefined} onClick={async ()=>{
 
@@ -272,12 +272,12 @@ return (
           aria-label="Tested frequency"
           placeholder="Type a number…"
           value={frequency}
-          onChange={(_, val) => setFrequency(val)}
+          onChange={(_, val) => setFrequency(val ?? 0)}
         />
         <Select
           disabled={portState !== undefined}
           value={frequencyMag}
-          onChange={(event) => setFrequencyMag(event.target.value)}
+          onChange={(event) => setFrequencyMag(Number(event.target.value))}
           sx={{ marginRight: '15px' }}
         >
           <MenuItem value={1}>Hz</MenuItem>
@@ -298,7 +298,7 @@ return (
           aria-label="Sweep time"
           placeholder="Type a number…"
           value={sweeptimeValue}
-          onChange={(_, val) => setSweeptimeValue(val)}
+          onChange={(_, val) => setSweeptimeValue(val ?? 100)}
         />
         <Select
           disabled={portState !== undefined}
@@ -320,7 +320,7 @@ return (
         aria-label="Trigger level [dBm]"
         placeholder="Type a number…"
         value={triggerLevel}
-        onChange={(_, val) => setTriggerLevel(val)}
+        onChange={(_, val) => setTriggerLevel(val ?? -70)}
       />
     </FormControl>
   </Box>

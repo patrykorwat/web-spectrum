@@ -42,10 +42,10 @@ import Typography from '@mui/material/Typography';
 import Breadcrumbs, { breadcrumbsClasses } from '@mui/material/Breadcrumbs';
 import NavigateNextRoundedIcon from '@mui/icons-material/NavigateNextRounded';
 
-import Spectrum from './pages/Spectrum.tsx';
-import Decoder from './pages/Decoder.tsx';
-import RtlDecoder from './pages/RtlDecoder.tsx';
-import SdrPlayDecoder from './pages/SdrPlayDecoder.tsx';
+import Spectrum from './pages/Spectrum';
+import Decoder from './pages/Decoder';
+import RtlDecoder from './pages/RtlDecoder';
+import SdrPlayDecoder from './pages/SdrPlayDecoder';
 import { Button } from '@mui/material';
 
 // eslint-disable-next-line no-extend-native

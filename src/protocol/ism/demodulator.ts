@@ -16,7 +16,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-import { Protocol, ProtocolToMsgLength } from "../protocol.ts";
+import { Protocol, ProtocolToMsgLength } from "../protocol";
 
 const MAG_LUT = new Uint16Array(129 * 129 * 2);
 
@@ -41,7 +41,7 @@ const maxGap = 1; // [ms] max gap equal to typical OOK signal length
 export class Demodulator {
     constructor(private avgSamples: number = 128) {}
 
-    private mag: Uint16Array;
+    private mag: Uint16Array | undefined;
 
     process(data, size, onMsg) {
         if (!this.mag) this.mag = new Uint16Array(size / 2);
@@ -60,14 +60,14 @@ export class Demodulator {
         onMsg(k);
     }
 
-    private computeMagnitudeVector = function (data, size) {
+    private computeMagnitudeVector = (data, size) => {
         for (let j = 0; j < size; j += 2) {
             let i = data[j] - 127;
             let q = data[j + 1] - 127;
 
             if (i < 0) i = -i;
             if (q < 0) q = -q;
-            this.mag[j / 2] = MAG_LUT[i * 129 + q];
+            this.mag![j / 2] = MAG_LUT[i * 129 + q];
         }
     };
 

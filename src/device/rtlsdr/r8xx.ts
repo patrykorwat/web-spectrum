@@ -13,9 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { RadioError, RadioErrorType } from "../errors.ts";
-import { RtlCom } from "./rtlcom.ts";
-import { Tuner } from "./tuner.ts";
+import { RadioError, RadioErrorType } from "../errors";
+import { RtlCom } from "./rtlcom";
+import { Tuner } from "./tuner";
 
 /** Standard configurations for the multiplexer in different frequency bands. */
 export const STD_MUX_CFGS: [number, number, number, number][] = [

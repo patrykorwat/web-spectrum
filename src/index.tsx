@@ -19,8 +19,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
-import App from './App.tsx';
-import reportWebVitals from './reportWebVitals.tsx';
+import App from './App';
+import reportWebVitals from './reportWebVitals';
 
 import '@fontsource/roboto/300.css';
 import '@fontsource/roboto/400.css';

@@ -12,7 +12,7 @@ class Buffer<T extends ArrayLike<number>> {
     count: number,
     length?: number
   ) {
-    this.buffers = [...Array(count).keys()].map(() => make(length || 0));
+    this.buffers = Array.from(Array(count).keys()).map(() => make(length || 0));
     this.current = 0;
   }
 

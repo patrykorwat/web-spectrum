@@ -25,10 +25,10 @@ import {
 
 import { styled } from '@mui/system';
 
-const NumberInput = React.forwardRef(function CustomNumberInput(
-  props,
-  ref,
-) {
+const NumberInput = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentProps<typeof BaseNumberInput>
+>(function CustomNumberInput(props, ref) {
   return (
     <BaseNumberInput
     slots={{

@@ -23,7 +23,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
  * Code Length: 2046 chips
  */
 
-import { SatelliteInfo } from './gps.ts';
+import { SatelliteInfo } from './gps';
 
 /**
  * BeiDou B1I Code Generator

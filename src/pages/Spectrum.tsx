@@ -32,10 +32,10 @@ import Select from '@mui/material/Select';
 
 import Stack from '@mui/system/Stack';
 
-import Label from '../components/Label.tsx';
-import NumberInput from '../components/NumberInput.tsx';
+import Label from '../components/Label';
+import NumberInput from '../components/NumberInput';
 
-import { downloadFile } from '../utils/io.ts';
+import { downloadFile } from '../utils/io';
 
 const width = 1024,
 height = 500;
@@ -288,7 +288,7 @@ return (
 
         reset();
 
-        readLoop(port);
+        readLoop();
       }}>Connect</Button>
       <Button disabled={portState === undefined} onClick={async ()=>{
       const writer = port.writable.getWriter();
@@ -328,7 +328,7 @@ return (
         aria-label="Points"
         placeholder="Type a number…"
         value={points}
-        onChange={(_, val) => setPoints(val)}
+        onChange={(_, val) => setPoints(val ?? 450)}
       />
     </FormControl>
     <FormControl defaultValue="">
@@ -339,12 +339,12 @@ return (
           aria-label="Start frequency"
           placeholder="Type a number…"
           value={startFrequency}
-          onChange={(_, val) => setStartFrequency(val)}
+          onChange={(_, val) => setStartFrequency(val ?? 88)}
         />
         <Select
           disabled={portState !== undefined}
           value={startFrequencyMag}
-          onChange={(event) => setStartFrequencyMag(event.target.value)}
+          onChange={(event) => setStartFrequencyMag(Number(event.target.value))}
           sx={{ marginRight: '15px' }}
         >
           <MenuItem value={1}>Hz</MenuItem>
@@ -363,12 +363,12 @@ return (
           aria-label="Stop frequency"
           placeholder="Type a number…"
           value={stopFrequency}
-          onChange={(event, val) => setStopFrequency(val)}
+          onChange={(event, val) => setStopFrequency(val ?? 108)}
         />
         <Select
           disabled={portState !== undefined}
           value={stopFrequencyMag}
-          onChange={(event) => setStopFrequencyMag(event.target.value)}
+          onChange={(event) => setStopFrequencyMag(Number(event.target.value))}
         >
           <MenuItem value={1}>Hz</MenuItem>
           <MenuItem value={1000}>kHz</MenuItem>

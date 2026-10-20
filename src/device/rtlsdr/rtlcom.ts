@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { RadioError, RadioErrorType } from "../errors.ts";
+import { RadioError, RadioErrorType } from "../errors";
 
 /** Low-level communications with the RTL2832U-base dongle. */
 export class RtlCom {
@@ -39,8 +39,8 @@ export class RtlCom {
   /** Returns branding information. */
   getBranding(): { manufacturer?: string; model?: string } {
     return {
-      manufacturer: this.device.manufacturerName,
-      model: this.device.productName,
+      manufacturer: this.device.manufacturerName ?? undefined,
+      model: this.device.productName ?? undefined,
     };
   }
 

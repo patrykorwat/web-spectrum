@@ -13,9 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { R8xx, STD_MUX_CFGS } from "./r8xx.ts";
-import { RtlCom } from "./rtlcom.ts";
-import { Tuner } from "./tune.tsr";
+import { R8xx, STD_MUX_CFGS } from "./r8xx";
+import { RtlCom } from "./rtlcom";
+import { Tuner } from "./tuner";
 
 /** Operations on the R820T tuner chip. */
 export class R820T extends R8xx implements Tuner {

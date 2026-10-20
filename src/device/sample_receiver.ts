@@ -13,8 +13,8 @@
 // limitations under the License.
 
 import { Demodulator as AdsBDemodulator } from '../protocol/ads-b/demodulator.js'
-import { Demodulator as IsmDemodulator } from '../protocol/ism/demodulator.ts'
-import { Protocol, isGNSS } from '../protocol/protocol.ts'
+import { Demodulator as IsmDemodulator } from '../protocol/ism/demodulator'
+import { Protocol, isGNSS } from '../protocol/protocol'
 
 /** Interface for classes that get samples from a Radio class. */
 export interface SampleReceiver {
@@ -32,7 +32,7 @@ export function concatenateReceivers(
   prev: SampleReceiver,
   next: SampleReceiver
 ): SampleReceiver {
-  let list = [];
+  const list: SampleReceiver[] = [];
   if (prev instanceof ReceiverSequence) {
     list.push(...prev.receivers);
   } else {

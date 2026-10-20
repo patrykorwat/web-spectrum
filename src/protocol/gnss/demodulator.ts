@@ -16,13 +16,13 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-import { Protocol } from '../protocol.ts';
-import { GNSSAcquisition, SatelliteInfo } from './gps.ts';
-import { GalileoAcquisition } from './galileo.ts';
-import { GLONASSAcquisition } from './glonass.ts';
-import { BeiDouAcquisition } from './beidou.ts';
-import { GNSSJammingDetector, JammingMetrics } from './jamming.ts';
-import { InterferenceMitigation } from './mitigation.ts';
+import { Protocol } from '../protocol';
+import { GNSSAcquisition, SatelliteInfo } from './gps';
+import { GalileoAcquisition } from './galileo';
+import { GLONASSAcquisition } from './glonass';
+import { BeiDouAcquisition } from './beidou';
+import { GNSSJammingDetector, JammingMetrics } from './jamming';
+import { InterferenceMitigation } from './mitigation';
 
 export interface GNSSDemodulatorResult {
   protocol: Protocol;

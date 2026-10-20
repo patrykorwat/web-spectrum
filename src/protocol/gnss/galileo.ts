@@ -23,7 +23,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
  * Code Length: 4092 chips (4x GPS)
  */
 
-import { SatelliteInfo } from './gps.ts';
+import { SatelliteInfo } from './gps';
 
 /**
  * Galileo E1 Code Generator

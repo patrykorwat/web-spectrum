@@ -39,8 +39,8 @@ import RadioGroup from '@mui/material/RadioGroup';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import FormLabel from '@mui/material/FormLabel';
 
-import Label from '../components/Label.tsx';
-import NumberInput from '../components/NumberInput.tsx';
+import Label from '../components/Label';
+import NumberInput from '../components/NumberInput';
 import Stack from '@mui/system/Stack';
 
 import Table from '@mui/material/Table';
@@ -51,14 +51,14 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Paper from '@mui/material/Paper';
 
-import { LoggingReceiver } from '../device/sample_receiver.ts';
-import { FilteringSampleReceiver, FilterConfig } from '../device/filter_receiver.ts';
-import { WebSocketReceiver } from '../device/websocket_receiver.ts';
-import { Demodulator as IsmDemodulator } from '../protocol/ism/demodulator.ts'
-import { GNSSDemodulator } from '../protocol/gnss/demodulator.ts'
-import { Protocol, isIsm, isGNSS } from '../protocol/protocol.ts'
+import { LoggingReceiver, SampleReceiver } from '../device/sample_receiver';
+import { FilteringSampleReceiver, FilterConfig } from '../device/filter_receiver';
+import { WebSocketReceiver } from '../device/websocket_receiver';
+import { Demodulator as IsmDemodulator } from '../protocol/ism/demodulator'
+import { GNSSDemodulator } from '../protocol/gnss/demodulator'
+import { Protocol, isIsm, isGNSS } from '../protocol/protocol'
 
-import { downloadFile } from '../utils/io.ts';
+import { downloadFile } from '../utils/io';
 
 const toHex = (buffer: Uint8Array) => {
   return Array.prototype.map.call(buffer, (x: number) => ('00' + x.toString(16)).slice(-2)).join('');
@@ -266,7 +266,7 @@ function SdrPlayDecoder() {
 
         // Automatically trigger processing after recording completes
         setTimeout(() => {
-          document.querySelector('[data-process-button]')?.click();
+          (document.querySelector('[data-process-button]') as HTMLElement | null)?.click();
         }, 2000); // Wait 2 seconds for file to be fully written
       }, (recordingDuration + 5) * 1000); // Duration + 5 seconds buffer
     } catch (error) {
@@ -285,7 +285,7 @@ function SdrPlayDecoder() {
 
       // Automatically trigger processing after manual stop
       setTimeout(() => {
-        document.querySelector('[data-process-button]')?.click();
+        (document.querySelector('[data-process-button]') as HTMLElement | null)?.click();
       }, 2000); // Wait 2 seconds for file to be fully written
     } catch (error) {
       console.error('Stop recording error:', error);
@@ -735,7 +735,7 @@ return (
               });
 
               // Wrap in filtering receiver if enabled
-              let sampleReceiver = loggingReceiver;
+              let sampleReceiver: SampleReceiver = loggingReceiver;
               if (filterEnabled) {
                 const filterConfig: FilterConfig = {
                   notchFilterEnabled: true,
@@ -1422,7 +1422,7 @@ return (
           disabled={websocketReceiver?.isConnected()}
           value={protocol}
           onChange={(event) => {
-            setProtocol(event.target.value);
+            setProtocol(event.target.value as Protocol);
             if (event.target.value === Protocol.ADSB) {
               setFrequency(1090);
               setFrequencyMag(1000000);
@@ -1464,7 +1464,7 @@ return (
           aria-label="Tested frequency"
           placeholder="Type a number…"
           value={frequency}
-          onChange={(_, val) => setFrequency(val)}
+          onChange={(_, val) => setFrequency(val ?? 1575.42)}
         />
         <Select
           disabled={websocketReceiver?.isConnected()}
