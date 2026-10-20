@@ -28,6 +28,7 @@ import LinearProgress from '@mui/material/LinearProgress';
 import CircularProgress from '@mui/material/CircularProgress';
 
 import { LineChart } from '@mui/x-charts/LineChart';
+import JammingHistoryChart, { JammingHistoryPoint } from '../components/JammingHistoryChart';
 
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
@@ -102,6 +103,7 @@ function SdrPlayDecoder() {
 
   // Jamming/Spoofing status
   const [jammingStatus, setJammingStatus] = useState<any>(null);
+  const [jammingHistory, setJammingHistory] = useState<JammingHistoryPoint[]>([]);
 
   // Progress tracking for recording and processing
   const [progressPhase, setProgressPhase] = useState<string>('');
@@ -611,7 +613,7 @@ return (
 
                   // Check if msg.msg is already a JSON result object (from parse_gnss_logs)
                   // or if it's a Uint8Array buffer that needs processing
-                  let result;
+                  let result: any;
                   if (msg.msg && typeof msg.msg === 'object' && 'satellites' in msg.msg && 'protocol' in msg.msg) {
                     // Already a GNSS result object from parse_gnss_logs.py
                     console.log(`[RtlDecoder] Received pre-processed GNSS data with ${msg.msg.satellites.length} satellites`);
@@ -681,6 +683,22 @@ return (
                     if (result.jamming) {
                       setJammingStatus(result.jamming);
                     }
+
+                    // Update jamming observables history (chart)
+                    setJammingHistory(prev => {
+                      const list = (result.satellites || []) as any[];
+                      const tracking = list.some(s => s.state) ? list.filter(s => s.state === 'TRACKING') : list;
+                      const n = tracking.length;
+                      const cn0 = n > 0 ? tracking.reduce((sum: number, s: any) => sum + (s.cn0 || 0), 0) / n : 0;
+                      const next = [...prev, {
+                        time: result.timestamp,
+                        noiseFloorDb: result.jamming.noiseFloorDb,
+                        totalPowerDb: result.jamming.totalPowerDb,
+                        cn0,
+                        sats: n
+                      }];
+                      return next.slice(-100);
+                    });
 
                     // Update satellite history for chart and track locked/lost satellites
                     setSatelliteHistory(prevHistory => {
@@ -1377,6 +1395,8 @@ return (
             <Typography variant="caption" sx={{ display: 'block', marginTop: '5px', color: 'text.secondary', textAlign: 'center' }}>
               Shows last {satelliteHistory.length} updates (~{Math.round(satelliteHistory.length / 60)} min of data)
             </Typography>
+
+            <JammingHistoryChart history={jammingHistory} />
 
           </Box>
         )}

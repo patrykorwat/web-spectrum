@@ -28,6 +28,7 @@ import LinearProgress from '@mui/material/LinearProgress';
 import CircularProgress from '@mui/material/CircularProgress';
 
 import { LineChart } from '@mui/x-charts/LineChart';
+import JammingHistoryChart, { JammingHistoryPoint } from '../components/JammingHistoryChart';
 
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
@@ -108,6 +109,7 @@ function RtlDecoder() {
 
   // Jamming status
   const [jammingStatus, setJammingStatus] = useState<any>(null);
+  const [jammingHistory, setJammingHistory] = useState<JammingHistoryPoint[]>([]);
 
   // Decoder selection (GNSS-SDR vs Gypsum)
   const [selectedDecoder, setSelectedDecoder] = useState<'gnss-sdr' | 'gypsum'>('gnss-sdr');
@@ -464,6 +466,23 @@ return (
                     setDecodedItems(prevDecodedItems => {
                       return [gnssMsg, ...prevDecodedItems];
                     });
+
+                    // Update jamming status and observables history (chart)
+                    setJammingStatus(result.jamming);
+                    setJammingHistory(prev => {
+                      const list = (result.satellites || []) as any[];
+                      const tracking = list.some(s => s.state) ? list.filter(s => s.state === 'TRACKING') : list;
+                      const n = tracking.length;
+                      const cn0 = n > 0 ? tracking.reduce((sum: number, s: any) => sum + (s.cn0 || 0), 0) / n : 0;
+                      const next = [...prev, {
+                        time: result.timestamp,
+                        noiseFloorDb: result.jamming.noiseFloorDb,
+                        totalPowerDb: result.jamming.totalPowerDb,
+                        cn0,
+                        sats: n
+                      }];
+                      return next.slice(-100);
+                    });
                   }
                 } else {
                   setPowerLevels(prevMsg => {
@@ -576,6 +595,23 @@ return (
                     };
                     setDecodedItems(prevDecodedItems => {
                       return [gnssMsg, ...prevDecodedItems];
+                    });
+
+                    // Update jamming status and observables history (chart)
+                    setJammingStatus(result.jamming);
+                    setJammingHistory(prev => {
+                      const list = (result.satellites || []) as any[];
+                      const tracking = list.some(s => s.state) ? list.filter(s => s.state === 'TRACKING') : list;
+                      const n = tracking.length;
+                      const cn0 = n > 0 ? tracking.reduce((sum: number, s: any) => sum + (s.cn0 || 0), 0) / n : 0;
+                      const next = [...prev, {
+                        time: result.timestamp,
+                        noiseFloorDb: result.jamming.noiseFloorDb,
+                        totalPowerDb: result.jamming.totalPowerDb,
+                        cn0,
+                        sats: n
+                      }];
+                      return next.slice(-100);
                     });
                   }
                 } else {
@@ -1132,6 +1168,8 @@ return (
           )}
         </Box>
       )}
+
+      <JammingHistoryChart history={jammingHistory} />
 
       {/* Position Fix Display */}
       {decodedItems[0]?.msg?.positionFix && (

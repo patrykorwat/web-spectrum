@@ -128,6 +128,7 @@ python3 gnss_sdr_bridge.py
 - ✅ **Format conversion** - Converts RTL-SDR uint8 to complex64 for GNSS-SDR
 - ✅ **Automatic processing** - Generates spectrum analysis and jamming detection
 - ✅ **WebSocket streaming** - Real-time processing logs to web UI
+- ✅ **Baseline comparison** - `gps_spectrum_analyzer.py <rec.dat> --baseline ref.dat` reports the noise-floor delta vs a quiet reference recording (the reliable, calibration-free jamming metric). Pulse and sweep detections require verified periodicity/coherent tracks (autocorrelation peak / straight peak track), and per-0.5 s noise-floor time series are exported to the JSON report (`time_series`) for charting.
 
 **Available GPS Decoders:**
 1. **GNSS-SDR** (Default) - Professional C++ implementation

@@ -28,6 +28,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
  * - Meaconing (GPS spoofing)
  */
 
+import { FFT } from '../../dsp/fft';
+
 export interface JammingMetrics {
   // Signal strength metrics (relative dB, not calibrated dBm)
   noiseFloorDb: number;           // Noise floor power in dB (relative)
@@ -45,9 +47,14 @@ export interface JammingMetrics {
   bandwidthHz: number;            // Bandwidth of interference
   spectralDensity: Float32Array;  // Power spectral density
 
+  // Pulse analysis (envelope autocorrelation)
+  pulseRateHz: number;            // Estimated pulse repetition rate (0 = none)
+  pulseDutyCycle: number;         // Fraction of time the envelope is "on"
+  pulseAcfPeak: number;           // Autocorrelation peak at the detected period
+
   // Statistical metrics
   kurtosis: number;               // Signal kurtosis (detects pulsed jamming)
-  agcLevel: number;               // Automatic Gain Control level
+  agcLevel: number;               // "AGC-like" level: total power above noise floor (dB)
   correlationLoss: number;        // Loss in correlation due to jamming
 
   timestamp: number;
@@ -69,7 +76,8 @@ export enum JammingType {
 export class GNSSJammingDetector {
   private readonly sampleRate: number;
   private readonly fftSize: number = 2048;
-  private readonly noiseThresholdDb: number = -110; // Typical GNSS noise floor
+  private readonly fft: FFT;
+  private readonly hann: Float32Array;
 
   // History for temporal analysis
   private powerHistory: number[] = [];
@@ -77,6 +85,12 @@ export class GNSSJammingDetector {
 
   constructor(sampleRate: number = 2.048e6) {
     this.sampleRate = sampleRate;
+    this.fft = FFT.ofLength(this.fftSize);
+    this.hann = new Float32Array(this.fftSize);
+    for (let i = 0; i < this.fftSize; i++) {
+      this.hann[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (this.fftSize - 1)));
+    }
+    this.fft.setWindow(this.hann);
   }
 
   /**
@@ -88,7 +102,7 @@ export class GNSSJammingDetector {
     const totalPower = this.calculatePower(samples);
     const totalPowerDb = 10 * Math.log10(totalPower);
 
-    // Calculate noise floor (estimate from lower percentile of sample powers)
+    // Calculate noise floor (median segment power: robust against jamming peaks)
     const noiseFloor = this.estimateNoiseFloor(samples);
     const noiseFloorDb = 10 * Math.log10(noiseFloor);
 
@@ -128,7 +142,7 @@ export class GNSSJammingDetector {
       }
     }
 
-    // Perform FFT for spectrum analysis
+    // Perform FFT for spectrum analysis (real radix-2 FFT on deinterleaved IQ)
     const spectrum = this.computeFFT(samples);
     const peakInfo = this.findPeakFrequency(spectrum);
 
@@ -136,19 +150,24 @@ export class GNSSJammingDetector {
     const kurtosis = this.calculateKurtosis(samples);
     const agcLevel = totalPowerDb - noiseFloorDb; // How much above noise floor
 
+    // Pulse-rate estimation via envelope autocorrelation
+    const pulse = this.estimatePulseRate(samples);
+
     // Detect jamming type
     const jammingType = this.detectJammingType(
       totalPowerDb,
       spectrum,
       kurtosis,
-      peakInfo
+      peakInfo,
+      pulse.rate
     );
 
     // Calculate confidence
     const jammerConfidence = this.calculateConfidence(
       jammingToSignalRatio,
       jammingType,
-      kurtosis
+      kurtosis,
+      pulse.acfPeak
     );
 
     // Update history
@@ -162,12 +181,15 @@ export class GNSSJammingDetector {
       totalPowerDb,
       signalPowerDb,
       jammingToSignalRatio,
-      isJammed: jammingToSignalRatio > 20, // J/S > 20 dB indicates jamming
+      isJammed: jammingToSignalRatio > 20 || pulse.detected, // J/S > 20 dB or periodic pulsing
       jammingType,
       jammerConfidence,
       peakFrequencyHz: peakInfo.frequency,
       bandwidthHz: peakInfo.bandwidth,
       spectralDensity: spectrum,
+      pulseRateHz: pulse.rate,
+      pulseDutyCycle: pulse.dutyCycle,
+      pulseAcfPeak: pulse.acfPeak,
       kurtosis,
       agcLevel,
       correlationLoss: Math.min(jammingToSignalRatio / 10, 100),
@@ -176,20 +198,27 @@ export class GNSSJammingDetector {
   }
 
   /**
-   * Estimate noise floor from sample distribution
-   * Uses lower percentile to avoid being skewed by strong signals/jamming
+   * Estimate noise floor from segment powers
+   * Uses the median of 2048-sample RMS powers, which is robust against
+   * strong transient peaks (jamming pulses, saturating bursts).
    */
   private estimateNoiseFloor(samples: Float32Array): number {
-    // Calculate instantaneous power for each sample
+    const seg = 2048;
+    const nSeg = Math.floor(samples.length / seg);
+    if (nSeg === 0) return 1e-10;
+    // Cap the number of analyzed segments to keep the cost bounded
+    const step = Math.max(1, Math.floor(nSeg / 512));
     const powers: number[] = [];
-    for (let i = 0; i < samples.length; i++) {
-      powers.push(samples[i] * samples[i]);
+    for (let s = 0; s < nSeg; s += step) {
+      let sum = 0;
+      const base = s * seg;
+      for (let i = base; i < base + seg; i++) {
+        sum += samples[i] * samples[i];
+      }
+      powers.push(sum / seg);
     }
-
-    // Sort and take 25th percentile as noise floor estimate
     powers.sort((a, b) => a - b);
-    const percentileIndex = Math.floor(powers.length * 0.25);
-    return powers[percentileIndex] || 1e-10; // Avoid log(0)
+    return powers[Math.floor(powers.length / 2)] || 1e-10;
   }
 
   /**
@@ -204,26 +233,23 @@ export class GNSSJammingDetector {
   }
 
   /**
-   * Compute FFT magnitude spectrum
+   * Compute magnitude spectrum using the shared radix-2 FFT.
+   * The input buffer holds interleaved I/Q samples; they are deinterleaved
+   * into a complex vector so the spectrum covers ±fs/2 correctly.
    */
   private computeFFT(samples: Float32Array): Float32Array {
-    const fftSize = Math.min(this.fftSize, samples.length);
-    const spectrum = new Float32Array(fftSize / 2);
-
-    // Simple DFT (in real implementation, use FFT library)
-    for (let k = 0; k < fftSize / 2; k++) {
-      let real = 0;
-      let imag = 0;
-
-      for (let n = 0; n < fftSize; n++) {
-        const angle = -2 * Math.PI * k * n / fftSize;
-        real += samples[n] * Math.cos(angle);
-        imag += samples[n] * Math.sin(angle);
-      }
-
-      spectrum[k] = Math.sqrt(real * real + imag * imag) / fftSize;
+    const n = Math.min(this.fftSize, Math.floor(samples.length / 2));
+    const real = new Float32Array(this.fftSize);
+    const imag = new Float32Array(this.fftSize);
+    for (let i = 0; i < n; i++) {
+      real[i] = samples[2 * i];
+      imag[i] = samples[2 * i + 1];
     }
-
+    const out = this.fft.transform(real, imag);
+    const spectrum = new Float32Array(this.fftSize / 2);
+    for (let k = 0; k < this.fftSize / 2; k++) {
+      spectrum[k] = Math.sqrt(out.real[k] * out.real[k] + out.imag[k] * out.imag[k]);
+    }
     return spectrum;
   }
 
@@ -263,6 +289,95 @@ export class GNSSJammingDetector {
   }
 
   /**
+   * Estimate pulse repetition rate from the power envelope.
+   *
+   * The envelope (200 us boxcar average of instantaneous power) of a pulsed
+   * jammer is an on/off waveform; its autocorrelation shows a strong peak at
+   * the pulse period. Random noise does not. Bounded to the first ~0.5 s of
+   * the buffer so the cost stays low; periodicity down to 20 Hz is detectable.
+   */
+  private estimatePulseRate(samples: Float32Array): { detected: boolean, rate: number, dutyCycle: number, acfPeak: number } {
+    const noDetection = { detected: false, rate: 0, dutyCycle: 0, acfPeak: 0 };
+    const maxSamples = Math.min(samples.length, 1048576); // ~0.5 s at 2.048 MSPS
+    const win = Math.max(1, Math.round(0.0002 * this.sampleRate)); // 200 us boxcar
+    const nWin = Math.floor(maxSamples / win);
+    if (nWin < 200) return noDetection;
+    const envRate = this.sampleRate / win;
+
+    // Envelope in dB
+    const env = new Float32Array(nWin);
+    for (let w = 0; w < nWin; w++) {
+      let sum = 0;
+      const base = w * win;
+      for (let i = base; i < base + win; i++) {
+        sum += samples[i] * samples[i];
+      }
+      env[w] = 10 * Math.log10(sum / win + 1e-12);
+    }
+
+    // Median envelope level
+    const sorted = Array.from(env).sort((a, b) => a - b);
+    const median = sorted[Math.floor(nWin / 2)];
+
+    // On/off waveform: 6 dB above the median envelope level
+    const thresh = median + 6;
+    let onCount = 0;
+    for (let i = 0; i < nWin; i++) {
+      if (env[i] > thresh) onCount++;
+    }
+    const dutyCycle = onCount / nWin;
+    if (dutyCycle <= 0.02 || dutyCycle >= 0.98) {
+      return { detected: false, rate: 0, dutyCycle, acfPeak: 0 };
+    }
+
+    // Autocorrelation of the on/off waveform via FFT (O(n log n))
+    const pad = FFT.ofLength(2 * nWin);
+    const re = new Float32Array(pad.length);
+    const im = new Float32Array(pad.length);
+    for (let i = 0; i < nWin; i++) {
+      re[i] = (env[i] > thresh ? 1 : 0) - dutyCycle; // zero-mean
+    }
+    const fwd = pad.transform(re, im);
+    // Power spectrum (real and even for real input) -> inverse transform is the ACF
+    const pre = new Float32Array(pad.length);
+    const pim = new Float32Array(pad.length);
+    for (let k = 0; k < pad.length; k++) {
+      pre[k] = fwd.real[k] * fwd.real[k] + fwd.imag[k] * fwd.imag[k];
+    }
+    const inv = pad.reverse(pre, pim);
+
+    // Search pulse periods: skip the first 1 ms, search down to 20 Hz
+    const minLag = Math.max(2, Math.round(0.001 * envRate));
+    const maxLag = Math.min(nWin - 1, Math.round(envRate / 20));
+    if (maxLag <= minLag) return noDetection;
+    const ref = inv.real[0] + 1e-12;
+    let bestLag = minLag;
+    let bestVal = -Infinity;
+    for (let l = minLag; l <= maxLag; l++) {
+      const v = inv.real[l] / ref;
+      if (v > bestVal) {
+        bestVal = v;
+        bestLag = l;
+      }
+    }
+    // ACF peaks repeat at every multiple of the true period; take the FIRST
+    // lag within 10% of the best peak so the fundamental period wins over
+    // 2T/3T harmonics (argmax alone can pick 2T).
+    let acfLag = bestLag;
+    for (let l = minLag; l <= bestLag; l++) {
+      if (inv.real[l] / ref >= bestVal * 0.9) {
+        acfLag = l;
+        break;
+      }
+    }
+    const acfPeak = inv.real[acfLag] / ref;
+    if (acfPeak > 0.5) {
+      return { detected: true, rate: envRate / acfLag, dutyCycle, acfPeak };
+    }
+    return { detected: false, rate: 0, dutyCycle, acfPeak };
+  }
+
+  /**
    * Calculate kurtosis (detects pulsed jamming)
    * Kurtosis > 3 indicates non-Gaussian (pulsed) signals
    */
@@ -286,27 +401,23 @@ export class GNSSJammingDetector {
   }
 
   /**
-   * Estimate AGC level based on signal power
-   */
-  private estimateAGC(power: number): number {
-    // AGC tries to maintain constant output power
-    // Higher AGC = weaker input signal or jamming
-    const nominalPower = 1e-13; // Expected GNSS power
-    return 10 * Math.log10(power / nominalPower);
-  }
-
-  /**
    * Detect type of jamming
    */
   private detectJammingType(
     totalPowerDb: number,
     spectrum: Float32Array,
     kurtosis: number,
-    peakInfo: { frequency: number, bandwidth: number }
+    peakInfo: { frequency: number, bandwidth: number },
+    pulseRate: number
   ): JammingType {
     // totalPowerDb is relative (not calibrated), so we can't use absolute thresholds
     // This check is performed in the analyze() method using power elevation
     // If we're here, assume some interference is present
+
+    // Periodic pulsing confirmed by envelope autocorrelation
+    if (pulseRate > 0) {
+      return JammingType.PULSED;
+    }
 
     // Pulsed jamming: high kurtosis
     if (kurtosis > 5) {
@@ -356,7 +467,8 @@ export class GNSSJammingDetector {
   private calculateConfidence(
     jsRatio: number,
     jammingType: JammingType,
-    kurtosis: number
+    kurtosis: number,
+    acfPeak: number
   ): number {
     if (jammingType === JammingType.NONE) {
       return 0;
@@ -370,7 +482,7 @@ export class GNSSJammingDetector {
     if (jsRatio > 40) confidence += 0.2;
 
     // Type-specific indicators
-    if (jammingType === JammingType.PULSED && kurtosis > 5) {
+    if (jammingType === JammingType.PULSED && (kurtosis > 5 || acfPeak > 0.5)) {
       confidence += 0.2;
     } else if (jammingType !== JammingType.UNKNOWN) {
       confidence += 0.2;

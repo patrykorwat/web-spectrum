@@ -180,10 +180,10 @@ class GPSSpectrumAnalyzer:
                 if len(frame) == nperseg:
                     # Apply Hann window
                     windowed = frame * np.hanning(nperseg)
-                    spectrum = np.abs(fft(windowed)) ** 2
-                    Sxx[:, i] = fftshift(spectrum)
+                    spectrum = np.abs(np.fft.fft(windowed)) ** 2
+                    Sxx[:, i] = np.fft.fftshift(spectrum)
 
-            f = fftshift(fftfreq(nperseg, 1/self.sample_rate))
+            f = np.fft.fftshift(np.fft.fftfreq(nperseg, 1/self.sample_rate))
 
         # Convert to dB
         Sxx_db = 10 * np.log10(Sxx + 1e-12)
@@ -203,118 +203,157 @@ class GPSSpectrumAnalyzer:
         return f, t, Sxx_db
 
     def detect_sweep_jammer(self, f, t, Sxx_db):
-        """Detect linear frequency sweep (common Russian jammer)"""
+        """Detect linear frequency sweep (diagonal line in the spectrogram).
+
+        The previous version triggered on the variance of a single frequency
+        bin across time. With a boxcar window every bin is a single-look
+        chi-square estimate, so its dB-space variance is ~31 dB^2 even on
+        clean noise - the old 15 dB^2 threshold fired on EVERY recording
+        (saved JSONs show "sweep detected" with invented sweep rates).
+        This version requires a COHERENT diagonal track: the per-frame peak
+        frequency must follow a straight line with small residuals.
+        """
         print("\n[1/4] Detecting SWEEP JAMMER...")
 
-        # Look for linear frequency progression over time
-        # Sweep jammers show diagonal lines in spectrogram
-
         detected = False
-        sweep_rate = 0
+        sweep_rate = 0.0
         confidence = 0.0
+        residual_hz = 0.0
 
-        # Calculate power variation across frequency bins over time
-        freq_variance = np.var(Sxx_db, axis=1)
-        max_variance_idx = np.argmax(freq_variance)
-        max_variance = freq_variance[max_variance_idx]
+        if len(t) >= 10:
+            # Strongest frequency bin in each time frame
+            peak_bins = np.argmax(Sxx_db, axis=0)
+            peak_freqs = f[peak_bins]
 
-        # High variance in a frequency bin suggests sweeping
-        if max_variance > 15:  # dB threshold
-            # Estimate sweep rate by finding slope in spectrogram
-            peak_freq_per_time = np.argmax(Sxx_db, axis=0)
-            sweep_rate = np.polyfit(t, f[peak_freq_per_time], 1)[0]
+            # Linear fit through the peak track
+            coeffs = np.polyfit(t, peak_freqs, 1)
+            sweep_rate = float(coeffs[0])
+            residual_hz = float(np.std(peak_freqs - np.polyval(coeffs, t)))
+            bin_hz = float(abs(f[1] - f[0])) if len(f) > 1 else self.sample_rate
 
-            # Only consider it a sweep if there's actual frequency movement
-            # Sweep rate should be > 10 kHz/s (otherwise it's likely pulse/noise jammer)
-            if abs(sweep_rate) > 10000:  # 10 kHz/s minimum
+            # Real sweep: the track hugs the line (within a few bins) and moves
+            # > 10 kHz/s. Random peak jumps produce huge residuals; a stationary
+            # CW tone gives a flat track (slope ~ 0).
+            if abs(sweep_rate) > 10e3 and residual_hz < 5 * bin_hz:
                 detected = True
-                confidence = min(max_variance / 30, 1.0)
-
-                print(f"  ✓ SWEEP DETECTED")
+                confidence = float(min(max(1.0 - residual_hz / (10 * bin_hz), 0.1), 1.0))
+                print("  \u2713 SWEEP DETECTED")
                 print(f"    Confidence: {confidence * 100:.1f}%")
-                print(f"    Sweep rate: {sweep_rate / 1e6:.3f} MHz/s")
+                print(f"    Sweep rate: {sweep_rate / 1e6:.3f} MHz/s (track residual {residual_hz / 1e3:.1f} kHz)")
             else:
-                print(f"  ✗ No sweep pattern detected (high variance but no frequency movement)")
+                print(f"  \u2717 No sweep pattern detected (rate {sweep_rate / 1e3:.1f} kHz/s, track residual {residual_hz / 1e3:.1f} kHz)")
         else:
-            print(f"  ✗ No sweep pattern detected")
+            print("  \u2717 No sweep pattern detected (too few time frames)")
 
         return {
             'detected': bool(detected),
             'confidence': float(confidence),
             'sweep_rate_hz_per_sec': float(sweep_rate),
+            'track_residual_hz': float(residual_hz),
             'type': 'LINEAR_SWEEP'
         }
 
-    def detect_pulse_jammer(self, samples):
-        """Detect pulsed jamming (on/off pattern)"""
-        print("\n[2/4] Detecting PULSE JAMMER...")
+    def detect_pulse_jammer(self, samples, verbose=True, time_series=None):
+        """Detect pulsed jamming (on/off pattern) with periodicity validation.
 
-        # Calculate instantaneous power
+        The previous version flagged the top 1% of power transitions as
+        "pulses", which fires even on clean Gaussian noise (it always finds
+        ~1% of samples above the 99th percentile). This version requires
+        actual PERIODICITY: the envelope is thresholded at a fixed level
+        above its median and autocorrelated. A real pulsed jammer produces
+        a strong autocorrelation peak at the pulse period; random noise
+        does not.
+
+        If time_series is a list, per-0.5s-segment (noise floor, p90, ACF
+        peak) rows are appended for charting (e.g. YouTube video plots).
+        """
+        # Envelope: non-overlapping 200 us boxcar average of instantaneous
+        # power (O(n), no aliasing issues for on/off envelopes <= ~1 kHz)
         power = np.abs(samples) ** 2
-
-        # Smooth power envelope - use shorter window for better pulse resolution
-        window_size = int(self.sample_rate * 0.0005)  # 0.5ms window (was 1ms)
-        power_smooth = np.convolve(power, np.ones(window_size)/window_size, mode='same')
-
-        # Detect sharp transitions
-        power_diff = np.abs(np.diff(power_smooth))
-        threshold = np.percentile(power_diff, 99)  # Top 1% of transitions
-
-        pulses = power_diff > threshold
-        num_pulses = np.sum(pulses)
+        win = max(1, int(self.sample_rate * 0.0002))  # 200 us boxcar
+        nwin = (len(power) // win) * win
+        env_rate = self.sample_rate / win  # ~5 kHz envelope rate
+        if nwin == 0:
+            if time_series is not None:
+                time_series.append({'t': 0.0, 'nf': float('nan'), 'p90': float('nan'), 'acf': 0.0, 'rate': 0.0})
+            return {'detected': False, 'confidence': 0.0, 'pulse_rate_hz': 0.0,
+                    'duty_cycle': 0.0, 'num_pulses': 0, 'acf_peak': 0.0, 'type': 'PULSE_JAMMER'}
+        env = power[:nwin].reshape(-1, win).mean(axis=1)
+        env_db = 10.0 * np.log10(env + 1e-12)
 
         detected = False
-        pulse_rate = 0
-        duty_cycle = 0
+        pulse_rate = 0.0
+        duty_cycle = 0.0
         confidence = 0.0
+        num_pulses = 0
+        acf_peak = 0.0
 
-        if num_pulses > 10:  # At least 10 pulses
-            detected = True
+        # Noise-floor / ACF time series (one row per 0.5 s, 50% overlap)
+        if time_series is not None:
+            seg_env = max(1, int(0.5 * env_rate))
+            hop_env = seg_env // 2
+            for i in range(0, max(1, len(env_db) - seg_env + 1), hop_env):
+                chunk = env_db[i:i + seg_env]
+                if len(chunk) < seg_env // 2:
+                    break
+                t_s = (i * win) / self.sample_rate
+                time_series.append({
+                    't': t_s,
+                    'nf': float(np.median(chunk)),
+                    'p90': float(np.percentile(chunk, 90)),
+                    'acf': 0.0,
+                    'rate': 0.0,
+                })
 
-            # Calculate pulse rate from total transitions
-            # Each pulse cycle has 2 transitions (rising + falling edge)
-            duration = len(samples) / self.sample_rate
-            pulse_rate = (num_pulses / 2) / duration
+        # On/off waveform: 6 dB above the median envelope level
+        thresh = np.median(env_db) + 6.0
+        onoff = (env_db > thresh).astype(np.float64)
 
-            # IMPROVED DUTY CYCLE CALCULATION:
-            # Use 80th percentile as threshold instead of median (50th)
-            # This prevents artificial 50% duty cycle bias
-            # For real pulse jamming, "on" state should be significantly above noise floor
-            power_threshold = np.percentile(power_smooth, 80)
+        if 0.02 < onoff.mean() < 0.98:
+            # Autocorrelation via FFT (O(n log n))
+            x = onoff - onoff.mean()
+            spec = np.fft.rfft(x, 2 * len(x))
+            acf = np.fft.irfft(spec * np.conj(spec), 2 * len(x))[:len(x)]
+            acf /= (acf[0] + 1e-12)
+            # Skip the first 1 ms (trivially high correlation), search
+            # periods down to 20 Hz
+            min_lag = max(2, int(0.001 * env_rate))
+            max_lag = min(len(acf) - 1, max(min_lag + 1, int(env_rate / 20)))
+            seg = acf[min_lag:max_lag]
+            k = int(np.argmax(seg)) + min_lag
+            acf_peak = float(acf[k])
+            # ACF peaks repeat at every multiple of the true period; take the
+            # FIRST lag within 10% of the best peak so the fundamental period
+            # wins over 2T/3T harmonics (argmax alone can pick 2T).
+            for cand in range(min_lag, k + 1):
+                if acf[cand] >= 0.9 * acf_peak:
+                    k = cand
+                    acf_peak = float(acf[k])
+                    break
+            if acf_peak > 0.5:
+                detected = True
+                pulse_rate = float(env_rate / k)
+                duty_cycle = float(onoff.mean())
+                period_s = k / env_rate
+                num_pulses = int(round((len(env) / env_rate) / period_s))
+                # Confidence: ACF contrast vs its own noise floor
+                ref = float(np.median(seg))
+                confidence = float(min(max((acf_peak - ref) / max(1.0 - ref, 1e-6), 0.0), 1.0))
+                if time_series is not None:
+                    # Annotate the series with the global pulse metrics
+                    for row in time_series:
+                        row['acf'] = acf_peak
+                        row['rate'] = pulse_rate
 
-            # Alternative method: Use dynamic threshold based on power distribution
-            # If there's a clear bimodal distribution (on/off states), use midpoint
-            power_std = np.std(power_smooth)
-            power_mean = np.mean(power_smooth)
-
-            # If power variation is high (pulsed), use adaptive threshold
-            # Otherwise fall back to percentile method
-            if power_std > power_mean * 0.3:  # High variation = clear pulses
-                # Find "on" state: regions significantly above mean
-                power_threshold = power_mean + power_std * 0.5
-
-            high_power = power_smooth > power_threshold
-            duty_cycle = np.sum(high_power) / len(high_power)
-
-            # Sanity check: if duty cycle is suspiciously close to 50%,
-            # it's likely threshold error, so recompute with higher threshold
-            if 0.45 <= duty_cycle <= 0.55:
-                # Try 85th percentile for more conservative estimate
-                power_threshold = np.percentile(power_smooth, 85)
-                high_power = power_smooth > power_threshold
-                duty_cycle = np.sum(high_power) / len(high_power)
-                print(f"    (Adjusted duty cycle threshold to 85th percentile)")
-
-            confidence = min(num_pulses / 100, 1.0)
-
-            print(f"  ✓ PULSE JAMMING DETECTED")
-            print(f"    Confidence: {confidence * 100:.1f}%")
-            print(f"    Pulse rate: {pulse_rate:.1f} Hz")
-            print(f"    Duty cycle: {duty_cycle * 100:.1f}%")
-            print(f"    Total pulses: {num_pulses}")
-            print(f"    Power threshold used: {10*np.log10(power_threshold+1e-12):.1f} dB")
-        else:
-            print(f"  ✗ No pulse pattern detected")
+        if verbose:
+            if detected:
+                print(f"  ✓ PULSE JAMMING DETECTED (periodic)")
+                print(f"    Confidence: {confidence * 100:.1f}%")
+                print(f"    Pulse rate: {pulse_rate:.1f} Hz (ACF peak {acf_peak:.2f})")
+                print(f"    Duty cycle: {duty_cycle * 100:.1f}%")
+                print(f"    Total pulses: ~{num_pulses}")
+            else:
+                print(f"  ✗ No periodic pulse pattern detected (ACF peak {acf_peak:.2f})")
 
         return {
             'detected': bool(detected),
@@ -322,56 +361,104 @@ class GPSSpectrumAnalyzer:
             'pulse_rate_hz': float(pulse_rate),
             'duty_cycle': float(duty_cycle),
             'num_pulses': int(num_pulses),
+            'acf_peak': float(acf_peak),
             'type': 'PULSE_JAMMER'
         }
 
-    def detect_noise_jammer(self, samples):
-        """Detect broadband noise jamming"""
+    def detect_noise_jammer(self, samples, baseline_file=None, verbose=True):
+        """Detect broadband noise jamming.
+
+        Improvements over the previous version:
+        - Flatness is measured over the central 1.5 MHz only (filter roll-off
+          at the band edges used to inflate std and mask real jammers).
+        - Narrow spectral lines (>10 dB above the local median) are excluded
+          before the statistics: GPS satellites and CW tones are spikes, not
+          noise, and they used to hide a flat, elevated noise floor.
+        - Optional baseline recording: reports the delta of the noise floor
+          vs the reference - the reliable, calibration-free jamming metric.
+        """
         print("\n[3/4] Detecting NOISE JAMMER...")
 
-        # Compute power spectral density
-        if SCIPY_AVAILABLE:
-            f, psd = signal.welch(samples, fs=self.sample_rate, nperseg=4096)
-        else:
-            spectrum = np.abs(fft(samples[:4096])) ** 2
-            psd = spectrum / len(spectrum)
-            f = fftfreq(len(spectrum), 1/self.sample_rate)
+        def band_stats(iq):
+            if SCIPY_AVAILABLE:
+                fb, psd = signal.welch(iq, fs=self.sample_rate, nperseg=4096)
+            else:
+                # Manual Welch: average several periodograms. A single 4096-point
+                # periodogram has chi-square fluctuation (std ~5.6 dB after the
+                # log), which would swamp the flatness test.
+                nseg_fb = max(1, min(64, len(iq) // 4096))
+                segs = iq[:nseg_fb * 4096].reshape(nseg_fb, 4096)
+                spec = np.abs(np.fft.fft(segs, axis=1)) ** 2
+                psd = np.fft.fftshift(spec.mean(axis=0) / 4096.0)
+                fb = np.fft.fftshift(np.fft.fftfreq(4096, 1/self.sample_rate))
+            pdb = 10 * np.log10(psd + 1e-12)
+            center = (fb >= -0.75e6) & (fb <= 0.75e6)
+            band = pdb[center] if center.any() else pdb
+            local_med = float(np.median(band))
+            flat = band[band < local_med + 10.0]  # exclude narrow spectral lines
+            if flat.size < 10:
+                flat = band
+            floor = float(np.median(flat))
+            variation = float(np.std(flat))
+            bw = float(np.sum(band > (floor - 3.0)) * (self.sample_rate / len(pdb)))
+            return floor, variation, bw
 
-        psd_db = 10 * np.log10(psd + 1e-12)
-
-        # Calculate flatness (noise should be flat across band)
-        psd_variation = np.std(psd_db)
-        noise_floor = np.median(psd_db)
+        noise_floor, psd_variation, bandwidth_hz = band_stats(samples)
 
         detected = False
-        noise_floor_db = float(noise_floor)
-        bandwidth_hz = 0
         confidence = 0.0
+        delta_db = None
+        baseline_flatness = None
 
-        # Flat spectrum with low variation = noise jammer
-        if psd_variation < 5:  # Very flat spectrum
-            detected = True
-            confidence = min((5 - psd_variation) / 5, 1.0)
+        if baseline_file and os.path.exists(baseline_file):
+            try:
+                base_samples = self.load_samples(baseline_file, max_samples=len(samples))
+                base_floor, base_var, _ = band_stats(base_samples)
+                delta_db = noise_floor - base_floor
+                baseline_flatness = base_var
+                # A real broadband jammer lifts the floor across the WHOLE band
+                # while the spectrum stays flat. +5 dB delta with low flatness
+                # is a strong, calibration-free indicator.
+                if delta_db >= 5.0 and psd_variation < 3.0:
+                    detected = True
+                    confidence = float(min((delta_db - 5.0) / 15.0 + 0.3, 1.0))
+                if verbose:
+                    print(f"    Baseline floor: {base_floor:.1f} dBFS (flatness {base_var:.2f} dB)")
+                    print(f"    Delta vs baseline: {delta_db:+.1f} dB")
+            except Exception as exc:
+                if verbose:
+                    print(f"    Baseline analysis failed: {exc}")
 
-            # Calculate -3dB bandwidth
-            threshold = noise_floor - 3
-            above_threshold = psd_db > threshold
-            bandwidth_hz = np.sum(above_threshold) * (self.sample_rate / len(psd_db))
+        # Without a baseline a flat band alone is NOT evidence of jamming:
+        # thermal noise is flat too. Require the delta-vs-baseline evidence;
+        # otherwise report metrics only (no false alarms on clean recordings).
+        note = None
+        if not detected and not baseline_file:
+            note = ('flat band is not evidence of jamming by itself; '
+                    'record a quiet reference and rerun with --baseline')
+            if verbose:
+                print(f"  ~ Flat spectrum ({psd_variation:.2f} dB) but no baseline - not flagged")
+                print(f"    ({note})")
 
-            print(f"  ✓ NOISE JAMMING DETECTED")
-            print(f"    Confidence: {confidence * 100:.1f}%")
-            print(f"    Noise floor: {noise_floor_db:.1f} dBFS")
-            print(f"    Bandwidth: {bandwidth_hz / 1e6:.3f} MHz")
-            print(f"    Spectrum flatness: {psd_variation:.2f} dB")
-        else:
-            print(f"  ✗ No broadband noise detected")
+        if verbose:
+            if detected:
+                print("  \u2713 NOISE JAMMING DETECTED")
+                print(f"    Confidence: {confidence * 100:.1f}%")
+                print(f"    Noise floor: {noise_floor:.1f} dBFS")
+                print(f"    Bandwidth: {bandwidth_hz / 1e6:.3f} MHz")
+                print(f"    Spectrum flatness: {psd_variation:.2f} dB")
+            else:
+                print("  \u2717 No broadband noise detected")
 
         return {
             'detected': bool(detected),
             'confidence': float(confidence),
-            'noise_floor_db': float(noise_floor_db),
+            'noise_floor_db': float(noise_floor),
             'bandwidth_hz': float(bandwidth_hz),
             'spectrum_flatness_db': float(psd_variation),
+            'delta_vs_baseline_db': (float(delta_db) if delta_db is not None else None),
+            'baseline_flatness_db': (float(baseline_flatness) if baseline_flatness is not None else None),
+            'note': note,
             'type': 'BROADBAND_NOISE'
         }
 
@@ -523,14 +610,17 @@ class GPSSpectrumAnalyzer:
             'type': 'MEACONING'
         }
 
-    def generate_report(self, results, output_path):
+    def generate_report(self, results, output_path, time_series=None, baseline_file=None):
         """Generate JSON report"""
+        analysis = {
+            'sample_rate': self.sample_rate,
+            'center_frequency': self.center_freq,
+        }
+        if baseline_file:
+            analysis['baseline'] = os.path.basename(baseline_file)
         report = {
             'timestamp': datetime.now().isoformat(),
-            'analysis': {
-                'sample_rate': self.sample_rate,
-                'center_frequency': self.center_freq,
-            },
+            'analysis': analysis,
             'detections': results,
             'summary': {
                 'jamming_detected': any(r['detected'] for r in results.values()),
@@ -538,12 +628,15 @@ class GPSSpectrumAnalyzer:
                 'max_confidence': max(r['confidence'] for r in results.values())
             }
         }
+        if time_series:
+            report['time_series'] = time_series
 
-        with open(output_path, 'w') as f:
-            json.dump(report, f, indent=2)
+        with open(output_path, 'w') as fh:
+            json.dump(report, fh, indent=2)
 
-        print(f"\n✓ Report saved: {output_path}")
+        print(f"\n\u2713 Report saved: {output_path}")
         return report
+
 
 
 def main():
@@ -575,6 +668,7 @@ Detection capabilities:
     parser.add_argument('-p', '--plot', type=str, help='Save spectrum plot to file')
     parser.add_argument('-o', '--output', type=str, help='JSON report output path')
     parser.add_argument('--sample-rate', type=float, default=2.048e6, help='Sample rate (default: 2.048 MSPS for GPS L1 main lobe)')
+    parser.add_argument('-b', '--baseline', type=str, help='Baseline (reference) IQ recording of the SAME site/antenna for delta noise-floor measurement')
 
     args = parser.parse_args()
 
@@ -608,6 +702,14 @@ Detection capabilities:
 
     samples = analyzer.load_samples(input_file, max_samples)
 
+    # Optional baseline (reference) recording for delta measurement
+    baseline_file = None
+    if args.baseline:
+        if os.path.exists(args.baseline):
+            baseline_file = args.baseline
+        else:
+            print(f"Warning: baseline file not found: {args.baseline} - continuing without it")
+
     # Compute spectrogram optimized for 10 MSPS data with multi-core processing
     # MEMORY-OPTIMIZED SETTINGS for 60-second recordings:
     # nperseg=2048 gives ~4.88 kHz bins (10 MHz / 2048) - adequate frequency resolution
@@ -621,16 +723,18 @@ Detection capabilities:
     f, t, Sxx_db = analyzer.compute_spectrogram(samples, nperseg=2048, noverlap=1024, n_jobs=-1)
 
     # Run all detections
+    time_series = []  # per-0.5s noise floor / envelope rows for charting
     results = {}
     results['sweep'] = analyzer.detect_sweep_jammer(f, t, Sxx_db)
-    results['pulse'] = analyzer.detect_pulse_jammer(samples)
-    results['noise'] = analyzer.detect_noise_jammer(samples)
+    results['pulse'] = analyzer.detect_pulse_jammer(samples, time_series=time_series)
+    results['noise'] = analyzer.detect_noise_jammer(samples, baseline_file=baseline_file)
     results['narrowband'] = analyzer.detect_narrowband_signals(f, t, Sxx_db)
     results['meaconing'] = analyzer.detect_meaconing(samples, f, t, Sxx_db)
 
     # Generate report
+    # Generate report
     output_path = args.output or input_file.replace('.dat', '_spectrum_analysis.json')
-    report = analyzer.generate_report(results, output_path)
+    report = analyzer.generate_report(results, output_path, time_series=time_series, baseline_file=baseline_file)
 
     # Print summary
     print("\n" + "=" * 70)
