@@ -1,4 +1,20 @@
 /*!
+ * Live sky map for GNSS decoding: polar view (azimuth/elevation) of GNSS
+ * satellites above the observer, with live-detected PRNs highlighted.
+ *
+ * Positions are propagated with SGP4 (satellite.js) from GPS TLE data.
+ * TLE source: live fetch from CelesTrak when the browser can reach it,
+ * otherwise the embedded snapshot (epoch 2026-10-19).
+ */
+
+/*!
+ * satellite-js v5.0.0
+ * (c) 2013 Shashwat Kandadai and UCSC
+ * https://github.com/shashwatak/satellite-js
+ * License: MIT
+ */
+
+/*!
 meshuga/web-spectrum
 Copyright (C) 2024 Patryk Orwat
 
