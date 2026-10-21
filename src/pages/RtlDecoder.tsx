@@ -50,7 +50,6 @@ import Paper from '@mui/material/Paper';
 import { RTL2832U_Provider } from "../device/rtlsdr/rtl2832u";
 import { Radio } from '../device/radio';
 import { LoggingReceiver, SampleReceiver } from '../device/sample_receiver';
-import { FilteringSampleReceiver, FilterConfig } from '../device/filter_receiver';
 import { WebSocketReceiver } from '../device/websocket_receiver';
 import { Demodulator as IsmDemodulator } from '../protocol/ism/demodulator'
 import { GnssDemodulatorClient } from '../protocol/gnss/gnssWorkerClient'
@@ -78,11 +77,6 @@ function RtlDecoder() {
   // Wide Doppler search (un-calibrated RTL clocks are tens of PPM off) + PPM correction
   const [wideDoppler, setWideDoppler] = useState<boolean>(false);
   const [ppm, setPpm] = useState<number>(0);
-
-  // Interference mitigation filter state
-  const [filterEnabled, setFilterEnabled] = useState<boolean>(false);
-  const [notchFrequency, setNotchFrequency] = useState<number>(0); // Auto-detect
-  const [filterReceiver, setFilterReceiver] = useState<FilteringSampleReceiver | null>(null);
 
   const [decodedItems, setDecodedItems] = useState<any>([]);
   // Satellites detected in the last demodulator pass (live sky map input)
@@ -139,7 +133,7 @@ return (
       justifyContent="center"
       alignItems="center"
       minHeight="10vh"
-      sx={{ marginBottom: '30px' }}>
+      sx={{ marginBottom: '30px', flexWrap: 'wrap', rowGap: 2 }}>
 
       <Stack spacing={2} sx={{ marginRight: '30px' }}>
         <ButtonGroup variant="contained" aria-label="Basic button group">
@@ -151,21 +145,9 @@ return (
             if (inputSource === 'WebSocket') {
               console.log(`[WebSocket] Starting WebSocket receiver from ${websocketUrl}`);
 
-              // Store filter receiver ref for dynamic updates
-              let filterReceiverRef: FilteringSampleReceiver | null = null;
-
               // Create the logging receiver
               // Handle demodulator results (from the worker or the inline fallback)
               const handleGnssResult = (result: any) => {
-                    // Auto-update notch filter frequency if CW jamming detected
-                    if (result.jamming.isJammed && result.jamming.jammingType === 'CW_TONE' && filterReceiverRef) {
-                      const detectedFreq = result.jamming.peakFrequencyHz;
-                      console.log(`[AUTO-FILTER] CW tone detected at ${detectedFreq.toFixed(0)} Hz, updating notch filter`);
-                      filterReceiverRef.updateConfig({
-                        notchFrequencyHz: detectedFreq
-                      });
-                      setNotchFrequency(Math.round(detectedFreq));
-                    }
 
                     // Create a message object for display with jamming info
                     let decoded = '';
@@ -243,27 +225,7 @@ return (
                 }
               });
 
-              // Wrap in filtering receiver if enabled
               let sampleReceiver: SampleReceiver = loggingReceiver;
-              if (filterEnabled) {
-                const filterConfig: FilterConfig = {
-                  notchFilterEnabled: true,
-                  notchFrequencyHz: notchFrequency || 0, // Will auto-detect if 0
-                  notchBandwidthHz: 1000, // 1 kHz notch width
-                  agcLimitEnabled: true,
-                  agcTargetPower: 0.1, // -10dB target
-                  pulseBlankingEnabled: true,
-                  pulseThresholdMultiplier: 3.0
-                };
-
-                const filteringReceiver = new FilteringSampleReceiver(loggingReceiver, filterConfig);
-                filterReceiverRef = filteringReceiver; // Set local ref
-                setFilterReceiver(filteringReceiver); // Set state
-                sampleReceiver = filteringReceiver;
-                console.log('[RTL-SDR] Interference mitigation filters ENABLED');
-              } else {
-                console.log('[WebSocket] Interference mitigation filters DISABLED');
-              }
 
               // Set GNSS protocol once (not on every sample batch!)
               if (isGNSS(protocol)) {
@@ -292,21 +254,9 @@ return (
               // (The provider caches the device, so Radio.start() reuses it.)
               await rtlProvider.get();
 
-              // Store filter receiver ref for dynamic updates
-              let filterReceiverRef: FilteringSampleReceiver | null = null;
-
               // Create the logging receiver
               // Handle demodulator results (from the worker or the inline fallback)
               const handleGnssResult = (result: any) => {
-                    // Auto-update notch filter frequency if CW jamming detected
-                    if (result.jamming.isJammed && result.jamming.jammingType === 'CW_TONE' && filterReceiverRef) {
-                      const detectedFreq = result.jamming.peakFrequencyHz;
-                      console.log(`[AUTO-FILTER] CW tone detected at ${detectedFreq.toFixed(0)} Hz, updating notch filter`);
-                      filterReceiverRef.updateConfig({
-                        notchFrequencyHz: detectedFreq
-                      });
-                      setNotchFrequency(Math.round(detectedFreq));
-                    }
 
                     // Create a message object for display with jamming info
                     let decoded = '';
@@ -384,27 +334,7 @@ return (
                 }
               });
 
-              // Wrap in filtering receiver if enabled
               let sampleReceiver: SampleReceiver = loggingReceiver;
-              if (filterEnabled) {
-                const filterConfig: FilterConfig = {
-                  notchFilterEnabled: true,
-                  notchFrequencyHz: notchFrequency || 0, // Will auto-detect if 0
-                  notchBandwidthHz: 1000, // 1 kHz notch width
-                  agcLimitEnabled: true,
-                  agcTargetPower: 0.1, // -10dB target
-                  pulseBlankingEnabled: true,
-                  pulseThresholdMultiplier: 3.0
-                };
-
-                const filteringReceiver = new FilteringSampleReceiver(loggingReceiver, filterConfig);
-                filterReceiverRef = filteringReceiver; // Set local ref
-                setFilterReceiver(filteringReceiver); // Set state
-                sampleReceiver = filteringReceiver;
-                console.log('[RTL-SDR] Interference mitigation filters ENABLED');
-              } else {
-                console.log('[RTL-SDR] Interference mitigation filters DISABLED');
-              }
 
               const rtlRadio = new Radio(rtlProvider, sampleReceiver);
               rtlRadio.setFrequency(freqHz);
@@ -563,38 +493,6 @@ return (
           {biasTEnabled ? 'ON (5V power to antenna)' : 'OFF'}
         </label>
       </Box>
-    </FormControl>
-
-    <FormControl>
-      <Label>Interference Mitigation (Notch Filter + AGC + Pulse Blanking)</Label>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <input
-          type="checkbox"
-          id="filterCheckbox"
-          disabled={radio?.isPlaying()}
-          checked={filterEnabled}
-          onChange={(e) => setFilterEnabled(e.target.checked)}
-          style={{ width: '20px', height: '20px', cursor: radio?.isPlaying() ? 'not-allowed' : 'pointer' }}
-        />
-        <label htmlFor="filterCheckbox" style={{ cursor: radio?.isPlaying() ? 'not-allowed' : 'pointer' }}>
-          {filterEnabled ? 'ENABLED (removes CW jamming)' : 'DISABLED'}
-        </label>
-      </Box>
-      {filterEnabled && (
-        <Box sx={{ mt: 1, pl: 4 }}>
-          <label htmlFor="notchFreq" style={{ fontSize: '0.9em' }}>
-            Notch Frequency (Hz, 0=auto-detect):
-          </label>
-          <input
-            type="number"
-            id="notchFreq"
-            disabled={radio?.isPlaying()}
-            value={notchFrequency}
-            onChange={(e) => setNotchFrequency(parseInt(e.target.value) || 0)}
-            style={{ marginLeft: '10px', width: '100px' }}
-          />
-        </Box>
-      )}
     </FormControl>
 
     <FormControl>
