@@ -16,7 +16,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 
 import Container from '@mui/material/Container';
 import Box from '@mui/material/Box';
@@ -53,7 +53,7 @@ import { LoggingReceiver, SampleReceiver } from '../device/sample_receiver';
 import { FilteringSampleReceiver, FilterConfig } from '../device/filter_receiver';
 import { WebSocketReceiver } from '../device/websocket_receiver';
 import { Demodulator as IsmDemodulator } from '../protocol/ism/demodulator'
-import { GNSSDemodulator } from '../protocol/gnss/demodulator'
+import { GnssDemodulatorClient } from '../protocol/gnss/gnssWorkerClient'
 import { Protocol, isIsm, isGNSS } from '../protocol/protocol'
 
 import { downloadFile } from '../utils/io';
@@ -101,7 +101,9 @@ function RtlDecoder() {
   }
 
   const ismDemodulator = new IsmDemodulator();
-  const [gnssDemodulator] = useState(() => new GNSSDemodulator());
+  const gnssDemodulator = useRef(new GnssDemodulatorClient()).current;
+  // Terminate the demodulation worker when the page unmounts
+  React.useEffect(() => () => gnssDemodulator.terminate(), []);
 
   const download = () => {
     let lines = 'decoded,time,msg'
@@ -149,17 +151,8 @@ return (
               let filterReceiverRef: FilteringSampleReceiver | null = null;
 
               // Create the logging receiver
-              const loggingReceiver = new LoggingReceiver(protocol, (msg) => {
-                if (protocol === Protocol.ADSB) {
-                  setDecodedItems(prevDecodedItems => {
-                    return [msg, ...prevDecodedItems];
-                  });
-                } else if (isGNSS(protocol)) {
-                  // GNSS processing
-                  console.log(`[RtlDecoder] GNSS callback received, msg.msg type: ${msg.msg?.constructor?.name}, length: ${msg.msg?.length}`);
-                  // Protocol is set once when radio starts, not on every sample batch
-                  const result = gnssDemodulator.processSamples(msg.msg.buffer);
-                  if (result) {
+              // Handle demodulator results (from the worker or the inline fallback)
+              const handleGnssResult = (result: any) => {
                     // Auto-update notch filter frequency if CW jamming detected
                     if (result.jamming.isJammed && result.jamming.jammingType === 'CW_TONE' && filterReceiverRef) {
                       const detectedFreq = result.jamming.peakFrequencyHz;
@@ -217,7 +210,20 @@ return (
                       }];
                       return next.slice(-100);
                     });
-                  }
+              };
+              gnssDemodulator.onResult(handleGnssResult);
+
+              const loggingReceiver = new LoggingReceiver(protocol, (msg) => {
+                if (protocol === Protocol.ADSB) {
+                  setDecodedItems(prevDecodedItems => {
+                    return [msg, ...prevDecodedItems];
+                  });
+                } else if (isGNSS(protocol)) {
+                  // GNSS processing
+                  console.log(`[RtlDecoder] GNSS callback received, msg.msg type: ${msg.msg?.constructor?.name}, length: ${msg.msg?.length}`);
+                  // Protocol is set once when radio starts, not on every sample batch
+                  const workerResult = gnssDemodulator.processSamples(msg.msg.buffer);
+                  if (workerResult) handleGnssResult(workerResult);
                 } else {
                   setPowerLevels(prevMsg => {
                     if (prevMsg.length > pointsBatch-1000) {
@@ -275,22 +281,18 @@ return (
             // USB (RTL-SDR) input source
             } else if (radio === undefined) {
               const rtlProvider = new RTL2832U_Provider();
+              // Ask for the device inside the click gesture: Chrome only shows
+              // the USB chooser while transient user activation is valid, and
+              // Radio.start() would otherwise call requestDevice() too late.
+              // (The provider caches the device, so Radio.start() reuses it.)
+              await rtlProvider.get();
 
               // Store filter receiver ref for dynamic updates
               let filterReceiverRef: FilteringSampleReceiver | null = null;
 
               // Create the logging receiver
-              const loggingReceiver = new LoggingReceiver(protocol, (msg) => {
-                if (protocol === Protocol.ADSB) {
-                  setDecodedItems(prevDecodedItems => {
-                    return [msg, ...prevDecodedItems];
-                  });
-                } else if (isGNSS(protocol)) {
-                  // GNSS processing
-                  console.log(`[RtlDecoder] GNSS callback received, msg.msg type: ${msg.msg?.constructor?.name}, length: ${msg.msg?.length}`);
-                  // Protocol is set once when radio starts, not on every sample batch
-                  const result = gnssDemodulator.processSamples(msg.msg.buffer);
-                  if (result) {
+              // Handle demodulator results (from the worker or the inline fallback)
+              const handleGnssResult = (result: any) => {
                     // Auto-update notch filter frequency if CW jamming detected
                     if (result.jamming.isJammed && result.jamming.jammingType === 'CW_TONE' && filterReceiverRef) {
                       const detectedFreq = result.jamming.peakFrequencyHz;
@@ -348,7 +350,20 @@ return (
                       }];
                       return next.slice(-100);
                     });
-                  }
+              };
+              gnssDemodulator.onResult(handleGnssResult);
+
+              const loggingReceiver = new LoggingReceiver(protocol, (msg) => {
+                if (protocol === Protocol.ADSB) {
+                  setDecodedItems(prevDecodedItems => {
+                    return [msg, ...prevDecodedItems];
+                  });
+                } else if (isGNSS(protocol)) {
+                  // GNSS processing
+                  console.log(`[RtlDecoder] GNSS callback received, msg.msg type: ${msg.msg?.constructor?.name}, length: ${msg.msg?.length}`);
+                  // Protocol is set once when radio starts, not on every sample batch
+                  const workerResult = gnssDemodulator.processSamples(msg.msg.buffer);
+                  if (workerResult) handleGnssResult(workerResult);
                 } else {
                   setPowerLevels(prevMsg => {
                     if (prevMsg.length > pointsBatch-1000) {
@@ -389,6 +404,9 @@ return (
               const rtlRadio = new Radio(rtlProvider, sampleReceiver);
               rtlRadio.setFrequency(freqHz);
               rtlRadio.setGain(40);
+              // The GNSS demodulator assumes 2.048 MSPS (1 ms = 2048 samples);
+              // the Radio default is 2.0 MSPS, which breaks C/A-code correlation.
+              if (isGNSS(protocol)) rtlRadio.setSampleRate(2048000);
 
               // Enable Bias-T if requested (for active GNSS antennas)
               if (biasTEnabled) {
