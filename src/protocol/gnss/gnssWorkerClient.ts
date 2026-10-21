@@ -31,6 +31,10 @@ export class GnssDemodulatorClient {
   private fallback: GNSSDemodulator | null = null;
   private listener: GnssResultListener | null = null;
   private lastProtocol: Protocol | null = null;
+  // Single-slot queue: while the worker is busy with a multi-second
+  // acquisition, keep only the newest IQ chunk and drop stale ones.
+  private pending: ArrayBuffer | null = null;
+  private busy: boolean = false;
 
   constructor() {
     try {
@@ -39,6 +43,9 @@ export class GnssDemodulatorClient {
         const data = e.data as { type: string; result?: GNSSDemodulatorResult };
         if (data && data.type === 'result' && data.result && this.listener) {
           this.listener(data.result);
+        } else if (data && data.type === 'ack') {
+          this.busy = false;
+          this.flush();
         }
       };
       this.worker.onerror = (e) => {
@@ -74,11 +81,25 @@ export class GnssDemodulatorClient {
     else if (this.fallback) this.fallback.setProtocol(protocol);
   }
 
+  setDoppler(rangeHz: number, stepHz: number) {
+    if (this.worker) this.worker.postMessage({ type: 'setDoppler', range: rangeHz, step: stepHz });
+    else if (this.fallback) this.fallback.setDopplerRange(rangeHz, stepHz);
+  }
+
+  private flush() {
+    if (this.worker && this.pending) {
+      this.worker.postMessage({ type: 'samples', buffer: this.pending });
+      this.pending = null;
+      this.busy = true;
+    }
+  }
+
   /** Feed an IQ chunk (interleaved float32 IQ in an ArrayBuffer).
    *  Returns a result only in inline-fallback mode; null when the worker owns it. */
   processSamples(buffer: ArrayBuffer): GNSSDemodulatorResult | null {
     if (this.worker) {
-      this.worker.postMessage({ type: 'samples', buffer });
+      this.pending = buffer; // drops any older, unprocessed chunk
+      if (!this.busy) this.flush();
       return null;
     }
     else if (this.fallback) {
@@ -95,5 +116,7 @@ export class GnssDemodulatorClient {
     }
     this.fallback = null;
     this.listener = null;
+    this.pending = null;
+    this.busy = false;
   }
 }

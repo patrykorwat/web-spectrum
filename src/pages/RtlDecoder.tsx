@@ -75,6 +75,10 @@ function RtlDecoder() {
   const [websocketUrl, setWebsocketUrl] = useState<string>(defaultWebSocketUrl);
   const [websocketReceiver, setWebsocketReceiver] = useState<WebSocketReceiver | null>(null);
 
+  // Wide Doppler search (un-calibrated RTL clocks are tens of PPM off) + PPM correction
+  const [wideDoppler, setWideDoppler] = useState<boolean>(false);
+  const [ppm, setPpm] = useState<number>(0);
+
   // Interference mitigation filter state
   const [filterEnabled, setFilterEnabled] = useState<boolean>(false);
   const [notchFrequency, setNotchFrequency] = useState<number>(0); // Auto-detect
@@ -265,6 +269,7 @@ return (
               if (isGNSS(protocol)) {
                 console.log(`[WebSocket] Setting GNSS protocol: ${protocol}`);
                 gnssDemodulator.setProtocol(protocol);
+                gnssDemodulator.setDoppler(wideDoppler ? 25000 : 5000, 250);
               }
 
               // Create and connect WebSocket receiver
@@ -407,6 +412,8 @@ return (
               // The GNSS demodulator assumes 2.048 MSPS (1 ms = 2048 samples);
               // the Radio default is 2.0 MSPS, which breaks C/A-code correlation.
               if (isGNSS(protocol)) rtlRadio.setSampleRate(2048000);
+              // Clock (PPM) correction for the RTL-SDR dongle
+              if (ppm !== 0) rtlRadio.setFrequencyCorrection(ppm);
 
               // Enable Bias-T if requested (for active GNSS antennas)
               if (biasTEnabled) {
@@ -418,6 +425,7 @@ return (
               if (isGNSS(protocol)) {
                 console.log(`[RTL-SDR] Setting GNSS protocol: ${protocol}`);
                 gnssDemodulator.setProtocol(protocol);
+                gnssDemodulator.setDoppler(wideDoppler ? 25000 : 5000, 250);
               }
 
               rtlRadio.start();
@@ -587,6 +595,45 @@ return (
           />
         </Box>
       )}
+    </FormControl>
+
+    <FormControl>
+      <Label>Clock correction (PPM, live)</Label>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <NumberInput
+          aria-label="PPM correction"
+          placeholder="0"
+          value={ppm}
+          onChange={(_, val) => {
+            const v = val ?? 0;
+            setPpm(v);
+            radio?.setFrequencyCorrection(v);
+          }}
+        />
+        <Typography variant="caption" color="text.secondary">
+          Typical RTL-SDR: 20–80 PPM. Wrong PPM shifts satellites outside the Doppler grid.
+        </Typography>
+      </Box>
+    </FormControl>
+
+    <FormControl>
+      <Label>Doppler search range</Label>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <input
+          type="checkbox"
+          id="wideDoppler"
+          checked={wideDoppler}
+          onChange={(e) => {
+            const on = e.target.checked;
+            setWideDoppler(on);
+            gnssDemodulator.setDoppler(on ? 25000 : 5000, 250);
+          }}
+          style={{ width: '20px', cursor: 'pointer' }}
+        />
+        <label htmlFor="wideDoppler" style={{ cursor: 'pointer' }}>
+          {wideDoppler ? 'WIDE (±25 kHz) — slower, for un-calibrated clocks' : 'Normal (±5 kHz)'}
+        </label>
+      </Box>
     </FormControl>
   </Box>
   </>

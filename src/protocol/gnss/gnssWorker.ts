@@ -26,13 +26,18 @@ const demod = new GNSSDemodulator();
 const ctx: any = globalThis as any;
 
 ctx.onmessage = (e: MessageEvent) => {
-  const data = e.data as { type: string; protocol?: Protocol; buffer?: ArrayBuffer };
+  const data = e.data as { type: string; protocol?: Protocol; buffer?: ArrayBuffer; range?: number; step?: number };
   if (data.type === 'setProtocol' && data.protocol !== undefined) {
     demod.setProtocol(data.protocol as Protocol);
+  } else if (data.type === 'setDoppler' && data.range !== undefined && data.step !== undefined) {
+    demod.setDopplerRange(data.range, data.step);
   } else if (data.type === 'samples' && data.buffer) {
     const result = demod.processSamples(data.buffer);
     if (result) {
       ctx.postMessage({ type: 'result', result });
     }
+    // Ack every chunk so the client can release its single-slot queue
+    // (results are optional; the ack is not).
+    ctx.postMessage({ type: 'ack' });
   }
 };

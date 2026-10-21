@@ -70,6 +70,19 @@ export class GNSSDemodulator {
   }
 
   /**
+   * Recreate the acquisition engines with a different Doppler search range.
+   * Un-corrected RTL-SDR clocks can be off by tens of PPM (~50-150 kHz at L1),
+   * far outside the default ±5 kHz grid — the wide range finds them anyway.
+   */
+  setDopplerRange(rangeHz: number, stepHz: number): void {
+    this.gpsAcquisition = new GNSSAcquisition(2.048e6, rangeHz, stepHz, 1.5);
+    this.galileoAcquisition = new GalileoAcquisition(2.048e6, rangeHz, stepHz, 1.5);
+    this.glonassAcquisition = new GLONASSAcquisition(2.048e6, rangeHz, stepHz, 1.5);
+    this.beidouAcquisition = new BeiDouAcquisition(2.048e6, rangeHz, stepHz, 1.5);
+    this.bufferPosition = 0;
+  }
+
+  /**
    * Process incoming RTL-SDR samples
    */
   processSamples(samples: ArrayBuffer): GNSSDemodulatorResult | null {
