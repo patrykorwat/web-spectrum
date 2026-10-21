@@ -61,6 +61,16 @@ const toHex = (buffer: Uint8Array) => {
   return Array.prototype.map.call(buffer, (x: number) => ('00' + x.toString(16)).slice(-2)).join('');
 }
 
+// Doppler search grids. A typical un-calibrated RTL-SDR clock is 20-80 PPM off
+// (31-126 kHz at L1), so the DEEP range is the one that actually finds satellites
+// on an un-calibrated dongle; the cluster center then yields the PPM correction.
+const DOPPLER_MODES = {
+  normal: { range: 5000, step: 250 },
+  wide: { range: 25000, step: 250 },
+  deep: { range: 160000, step: 500 },
+} as const;
+type DopplerMode = keyof typeof DOPPLER_MODES;
+
 function RtlDecoder() {
   const [radio, setRadio] = useState<Radio>();
   const [protocol, setProtocol] = useState<Protocol>(Protocol.ADSB);
@@ -74,8 +84,8 @@ function RtlDecoder() {
   const [websocketUrl, setWebsocketUrl] = useState<string>(defaultWebSocketUrl);
   const [websocketReceiver, setWebsocketReceiver] = useState<WebSocketReceiver | null>(null);
 
-  // Wide Doppler search (un-calibrated RTL clocks are tens of PPM off) + PPM correction
-  const [wideDoppler, setWideDoppler] = useState<boolean>(false);
+  // Doppler search mode (un-calibrated RTL clocks are tens of PPM off) + PPM correction
+  const [dopplerMode, setDopplerMode] = useState<DopplerMode>('normal');
   const [ppm, setPpm] = useState<number>(0);
 
   const [decodedItems, setDecodedItems] = useState<any>([]);
@@ -161,9 +171,14 @@ return (
                       decoded += `⚠️ JAMMING: ${result.jamming.jammingType} (J/S: ${result.jamming.jammingToSignalRatio.toFixed(1)}dB${freqInfo}) | `;
                     }
 
-                    // Satellite info
+                    // Satellite info; in wide/deep mode the mean Doppler of the
+                    // cluster ≈ the dongle clock error (baseband offset = -PPM·1575.42 Hz)
                     if (result.satellites.length > 0) {
                       decoded += `${result.satellites.length} sat(s): ${result.satellites.map(s => `${s.prn}(${s.snr.toFixed(1)}dB)`).join(', ')}`;
+                      if (dopplerMode !== 'normal') {
+                        const meanHz = result.satellites.reduce((sum, s) => sum + s.dopplerHz, 0) / result.satellites.length;
+                        decoded += ` | clock offset ≈ ${(meanHz / 1000).toFixed(1)} kHz → try PPM ${(-meanHz / 1575.42).toFixed(1)}`;
+                      }
                     } else if (result.jamming.isJammed) {
                       decoded += 'No satellites - jammed';
                     } else {
@@ -231,7 +246,7 @@ return (
               if (isGNSS(protocol)) {
                 console.log(`[WebSocket] Setting GNSS protocol: ${protocol}`);
                 gnssDemodulator.setProtocol(protocol);
-                gnssDemodulator.setDoppler(wideDoppler ? 25000 : 5000, 250);
+                gnssDemodulator.setDoppler(DOPPLER_MODES[dopplerMode].range, DOPPLER_MODES[dopplerMode].step);
               }
 
               // Create and connect WebSocket receiver
@@ -270,9 +285,14 @@ return (
                       decoded += `⚠️ JAMMING: ${result.jamming.jammingType} (J/S: ${result.jamming.jammingToSignalRatio.toFixed(1)}dB${freqInfo}) | `;
                     }
 
-                    // Satellite info
+                    // Satellite info; in wide/deep mode the mean Doppler of the
+                    // cluster ≈ the dongle clock error (baseband offset = -PPM·1575.42 Hz)
                     if (result.satellites.length > 0) {
                       decoded += `${result.satellites.length} sat(s): ${result.satellites.map(s => `${s.prn}(${s.snr.toFixed(1)}dB)`).join(', ')}`;
+                      if (dopplerMode !== 'normal') {
+                        const meanHz = result.satellites.reduce((sum, s) => sum + s.dopplerHz, 0) / result.satellites.length;
+                        decoded += ` | clock offset ≈ ${(meanHz / 1000).toFixed(1)} kHz → try PPM ${(-meanHz / 1575.42).toFixed(1)}`;
+                      }
                     } else if (result.jamming.isJammed) {
                       decoded += 'No satellites - jammed';
                     } else {
@@ -355,7 +375,7 @@ return (
               if (isGNSS(protocol)) {
                 console.log(`[RTL-SDR] Setting GNSS protocol: ${protocol}`);
                 gnssDemodulator.setProtocol(protocol);
-                gnssDemodulator.setDoppler(wideDoppler ? 25000 : 5000, 250);
+                gnssDemodulator.setDoppler(DOPPLER_MODES[dopplerMode].range, DOPPLER_MODES[dopplerMode].step);
               }
 
               rtlRadio.start();
@@ -516,22 +536,24 @@ return (
 
     <FormControl>
       <Label>Doppler search range</Label>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <input
-          type="checkbox"
-          id="wideDoppler"
-          checked={wideDoppler}
-          onChange={(e) => {
-            const on = e.target.checked;
-            setWideDoppler(on);
-            gnssDemodulator.setDoppler(on ? 25000 : 5000, 250);
+      <Stack direction="row" sx={{ alignItems: 'center' }}>
+        <Select
+          value={dopplerMode}
+          onChange={(event) => {
+            const mode = event.target.value as DopplerMode;
+            setDopplerMode(mode);
+            gnssDemodulator.setDoppler(DOPPLER_MODES[mode].range, DOPPLER_MODES[mode].step);
           }}
-          style={{ width: '20px', cursor: 'pointer' }}
-        />
-        <label htmlFor="wideDoppler" style={{ cursor: 'pointer' }}>
-          {wideDoppler ? 'WIDE (±25 kHz) — slower, for un-calibrated clocks' : 'Normal (±5 kHz)'}
-        </label>
-      </Box>
+          sx={{ marginRight: '15px', width: '300px' }}
+        >
+          <MenuItem value="normal">Normal (±5 kHz) — fastest</MenuItem>
+          <MenuItem value="wide">WIDE (±25 kHz) — covers ±16 PPM</MenuItem>
+          <MenuItem value="deep">DEEP (±160 kHz) — covers ±100 PPM, ~7 min/cycle</MenuItem>
+        </Select>
+        <Typography variant="caption" color="text.secondary">
+          Start with DEEP on an un-calibrated dongle; the detected cluster gives the PPM.
+        </Typography>
+      </Stack>
     </FormControl>
   </Box>
   </>
