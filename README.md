@@ -189,6 +189,7 @@ Direct in-browser signal decoding:
 - **ADS-B** - Aircraft position tracking (1090 MHz)
 - **ISM GateTX** - 433/868 MHz protocols
 - **Basic GNSS** - GPS L1, Galileo E1, GLONASS L1OF, BeiDou B1I
+- **Live spectrum** - Real-time FFT + waterfall of the passband ("Spectrum" page under RTL-SDR in the menu)
 
 **Professional Mode (GNSS-SDR):**
 

@@ -45,6 +45,7 @@ import NavigateNextRoundedIcon from '@mui/icons-material/NavigateNextRounded';
 import Spectrum from './pages/Spectrum';
 import Decoder from './pages/Decoder';
 import RtlDecoder from './pages/RtlDecoder';
+import RtlSpectrum from './pages/RtlSpectrum';
 import SdrPlayDecoder from './pages/SdrPlayDecoder';
 import { Button } from '@mui/material';
 
@@ -115,13 +116,14 @@ const mainListItems = [
   { text: 'Spectrum', icon: <EqualizerIcon /> },
   { text: 'Decode', icon: <TroubleshootIcon /> },
   { group: 'RTL-SDR'},
+  { text: 'Spectrum', icon: <EqualizerIcon /> },
   { text: 'Decode', icon: <TroubleshootIcon /> },
   { group: 'SDRPlay'},
   { text: 'Decode', icon: <TroubleshootIcon /> },
 ];
 
 function App() {
-  const [menuSelection, setMenuSelection] = useState(6); // Default to SDRPlay GNSS-SDR Decoder
+  const [menuSelection, setMenuSelection] = useState(7); // Default to SDRPlay GNSS-SDR Decoder
 
 return (
   <ThemeProvider theme={darkTheme}>
@@ -206,14 +208,14 @@ return (
             >
               <Typography variant="body1">Web Spectrum</Typography>
               <Typography variant="body1">
-                {menuSelection < 3 ? 'TinySA Ultra' : (menuSelection < 5 ? 'RTL-SDR' : 'SDRPlay')}
+                {menuSelection < 3 ? 'TinySA Ultra' : (menuSelection < 6 ? 'RTL-SDR' : 'SDRPlay')}
               </Typography>
               <Typography variant="body1" sx={{ color: 'text.primary', fontWeight: 600 }}>
                 {mainListItems[menuSelection].text}
               </Typography>
             </StyledBreadcrumbs>
           </Stack>
-          { menuSelection === 1 ? <Spectrum /> : (menuSelection === 2 ? <Decoder /> : (menuSelection === 4 ? <RtlDecoder /> : (menuSelection === 6 ? <SdrPlayDecoder /> : <RtlDecoder />))) }          
+          { menuSelection === 1 ? <Spectrum /> : (menuSelection === 2 ? <Decoder /> : (menuSelection === 4 ? <RtlSpectrum /> : (menuSelection === 5 ? <RtlDecoder /> : (menuSelection === 7 ? <SdrPlayDecoder /> : <RtlDecoder />)))) }          
         </Stack>
       </Box>
     </Box>
