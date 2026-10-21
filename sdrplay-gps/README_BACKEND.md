@@ -1,5 +1,11 @@
 # GPS Backend Services - Quick Start Guide
 
+> **Note:** `gnss_sdr_bridge.py` (the live GNSS-SDR WebSocket bridge on port 8766) is **not part of
+> this repository**. `./start_backend.sh` detects that and skips the service with a warning instead of
+> failing. The RTL-SDR decoder page does not need any backend (it talks to the dongle directly via
+> WebUSB). For live SDRPlay streaming into the browser use the included SoapySDR bridge:
+> `python3 sdrplay_bridge.py --port 8765` (requires SoapySDR + the SDRPlay API).
+
 ## 🚀 One-Command Startup
 
 Start all backend services with a single command:

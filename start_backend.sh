@@ -82,6 +82,17 @@ start_websocket() {
         return
     fi
 
+    # gnss_sdr_bridge.py is NOT part of this repository (it belongs to the
+    # author's private GNSS-SDR tooling). Skip gracefully instead of failing.
+    if [ ! -f "$SDRPLAY_DIR/gnss_sdr_bridge.py" ]; then
+        print_status "$YELLOW" "⚠ gnss_sdr_bridge.py is not included in this repo — WebSocket Server skipped."
+        print_status "$YELLOW" "  The RTL-SDR decoder page needs NO backend (in-browser processing via WebUSB)."
+        print_status "$YELLOW" "  For live SDRPlay streaming run: python3 sdrplay_bridge.py --port 8765"
+        print_status "$YELLOW" "  (requires SoapySDR + the SDRPlay API; WebSocket URL in the UI: ws://localhost:8765)"
+        rm -f "$WS_PIDFILE"
+        return 1
+    fi
+
     print_status "$BLUE" "Starting WebSocket Server (port 8766)..."
     cd "$SDRPLAY_DIR"
     nohup python3 gnss_sdr_bridge.py > "$SDRPLAY_DIR/logs/websocket.log" 2>&1 &
@@ -91,7 +102,7 @@ start_websocket() {
     if is_running "$WS_PIDFILE"; then
         print_status "$GREEN" "✓ WebSocket Server started (PID $(cat $WS_PIDFILE))"
     else
-        print_status "$RED" "✗ Failed to start WebSocket Server"
+        print_status "$RED" "✗ Failed to start WebSocket Server — check $SDRPLAY_DIR/logs/websocket.log"
         return 1
     fi
 }
@@ -138,6 +149,8 @@ show_status() {
     if is_running "$WS_PIDFILE"; then
         local pid=$(cat "$WS_PIDFILE")
         print_status "$GREEN" "✓ WebSocket Server: RUNNING (PID $pid, port 8766)"
+    elif [ ! -f "$SDRPLAY_DIR/gnss_sdr_bridge.py" ]; then
+        print_status "$YELLOW" "⚠ WebSocket Server: NOT INSTALLED (gnss_sdr_bridge.py is not part of this repo)"
     else
         print_status "$RED" "✗ WebSocket Server: STOPPED"
     fi
@@ -173,7 +186,11 @@ start_all() {
     print_status "$GREEN" "========================================"
     echo ""
     print_status "$BLUE" "HTTP API:    http://localhost:5001"
-    print_status "$BLUE" "WebSocket:   ws://localhost:8766"
+    if [ -f "$SDRPLAY_DIR/gnss_sdr_bridge.py" ]; then
+        print_status "$BLUE" "WebSocket:   ws://localhost:8766"
+    else
+        print_status "$BLUE" "WebSocket:   not included in this repo (RTL-SDR page: no backend needed; SDRPlay: python3 sdrplay_bridge.py --port 8765)"
+    fi
     echo ""
     print_status "$YELLOW" "Logs location: $SDRPLAY_DIR/logs/"
     print_status "$YELLOW" "To stop: ./start_backend.sh stop"
